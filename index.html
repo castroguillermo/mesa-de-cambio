@@ -19,10 +19,55 @@
 <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+/* Verifica que las 5 librerías llegaron desde internet */
+window.addEventListener("load", function () {
+  var faltan = [];
+  if (!window.React) faltan.push("React");
+  if (!window.ReactDOM) faltan.push("ReactDOM");
+  if (!window.Recharts) faltan.push("Recharts");
+  if (!window.XLSX) faltan.push("XLSX");
+  if (!window.Babel) faltan.push("Babel");
+  if (faltan.length) window.__show("No se pudieron descargar estas librerías: " + faltan.join(", ") + ".\nRevisa tu conexión a internet y recarga la página.");
+});
+</script>
 <style>html,body,#root{min-height:100%;background:#EEF1EC}</style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;color:#0C2A20;gap:10px">
+    <div style="font-size:34px">$</div>
+    <div style="font-weight:bold">Cargando Mesa de Cambio…</div>
+    <div style="font-size:12px;color:#888">Si este mensaje no desaparece en unos segundos,<br/>revisa tu conexión a internet y recarga.</div>
+  </div>
+</div>
+
+<script>
+/* ===== Detector de errores: muestra en pantalla cualquier fallo ===== */
+(function () {
+  function show(msg) {
+    var el = document.getElementById("err-panel");
+    if (!el) {
+      el = document.createElement("pre");
+      el.id = "err-panel";
+      el.style.cssText = "position:fixed;left:8px;right:8px;bottom:8px;max-height:45vh;overflow:auto;background:#7f1d1d;color:#fff;padding:12px 14px;border-radius:12px;font-size:12px;z-index:99999;white-space:pre-wrap;font-family:monospace";
+      document.body.appendChild(el);
+    }
+    el.textContent += msg + "\n\n";
+  }
+  window.__show = show;
+  window.addEventListener("error", function (e) {
+    if (e.target && (e.target.src || e.target.href)) {
+      show("NO CARGÓ: " + (e.target.src || e.target.href));
+    } else {
+      show("ERROR: " + (e.message || e.type) + (e.lineno ? "  (línea " + e.lineno + ")" : ""));
+    }
+  }, true);
+  window.addEventListener("unhandledrejection", function (e) {
+    show("ERROR ASYNC: " + ((e.reason && e.reason.message) || e.reason));
+  });
+})();
+</script>
 
 <script>
 /* ===== Base de datos local (IndexedDB) con la misma interfaz window.storage ===== */
