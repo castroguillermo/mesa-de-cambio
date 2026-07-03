@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Mesa de Cambio</title>
+<meta name="theme-color" content="#0C2A20" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Mesa Cambio" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+<link rel="icon" type="image/png" href="./icon-192.png" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>html,body,#root{min-height:100%;background:#EEF1EC}</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+/* ===== Base de datos local (IndexedDB) con la misma interfaz window.storage ===== */
+window.storage = (() => {
+  let dbp = null;
+  const openDB = () => new Promise((res, rej) => {
+    const r = indexedDB.open("mesa-de-cambio-db", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  const db = () => (dbp || (dbp = openDB()));
+  const run = async (mode, fn) => {
+    const d = await db();
+    return new Promise((res, rej) => {
+      const t = d.transaction("kv", mode);
+      const q = fn(t.objectStore("kv"));
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    });
+  };
+  return {
+    async get(key) {
+      const v = await run("readonly", (s) => s.get(key));
+      return v === undefined ? null : { key, value: v };
+    },
+    async set(key, value) {
+      await run("readwrite", (s) => s.put(value, key));
+      return { key, value };
+    },
+    async delete(key) {
+      await run("readwrite", (s) => s.delete(key));
+      return { key, deleted: true };
+    },
+  };
+})();
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+}
+</script>
+
+<script type="text/babel" data-presets="react">
+
+const { useState, useEffect, useMemo, useCallback } = React;
+const { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } = Recharts;
+
+const mkIcon = (inner) => ({ size = 18, strokeWidth = 2, ...p }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...p}
+    dangerouslySetInnerHTML={{ __html: inner }} />
+);
+const Plus = mkIcon('<path d="M12 5v14M5 12h14"/>');
+const X = mkIcon('<path d="M18 6 6 18M6 6l12 12"/>');
+const ChevronDown = mkIcon('<path d="m6 9 6 6 6-6"/>');
+const CheckCircle2 = mkIcon('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>');
+const AlertTriangle = mkIcon('<path d="M12 3 2.5 20a1 1 0 0 0 .9 1.5h17.2a1 1 0 0 0 .9-1.5L12 3z"/><path d="M12 9v5"/><path d="M12 17h.01"/>');
+const Trash2 = mkIcon('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/>');
+const Bell = mkIcon('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>');
+const Wallet = mkIcon('<path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>');
+const ArrowLeftRight = mkIcon('<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>');
+const Users = mkIcon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>');
+const UserRound = mkIcon('<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>');
+const Download = mkIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>');
+const Landmark = mkIcon('<path d="M3 22h18"/><path d="M6 18v-7"/><path d="M10 18v-7"/><path d="M14 18v-7"/><path d="M18 18v-7"/><path d="m12 2 9 6H3l9-6z"/>');
+const Banknote = mkIcon('<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01"/><path d="M18 12h.01"/>');
+const Coins = mkIcon('<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/>');
+const TrendingUp = mkIcon('<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>');
+const CircleDollarSign = mkIcon('<circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 6v2"/><path d="M12 16v2"/>');
+const Settings2 = mkIcon('<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>');
+const Save = mkIcon('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>');
+const FileDown = mkIcon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h6"/><path d="M12 12v6"/><path d="m9 15 3 3 3-3"/>');
+const FileUp = mkIcon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h6"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/>');
+
+
+
+/* ============================== Constantes ============================== */
+const FEE_P2P = 0.06;      // USDT por venta P2P en Binance
+const FEE_WIRE_OUT = 30;   // USD por wire emitido
+const FEE_WIRE_IN = 15;    // USD por wire recibido
+const STORAGE_KEY = "cambiox-v1";
+
+const METODOS = ["Zelle", "Transferencia BofA", "Wire", "Efectivo"];
+
+const TIPOS = {
+  compra_usd:      { label: "Compra de USD (venta de Bs)", short: "Compra USD", desc: "El cliente te da USD y tú le pagas Bs vendiendo USDT en Binance." },
+  venta_usdt:      { label: "Venta de USDT por USD", short: "Venta USDT", desc: "Vendes USDT y recibes USD (Zelle, BofA, Wire o efectivo) cobrando un %." },
+  venta_efectivo:  { label: "Venta de efectivo", short: "Venta efectivo", desc: "Entregas efectivo y te depositan el monto más una comisión, compartida con un tercero." },
+  retiro_efectivo: { label: "Banco → Efectivo", short: "Banco→Efectivo", desc: "Conviertes saldo del banco en efectivo físico (1:1)." },
+  recompra_usdt:   { label: "Recompra de USDT", short: "Recompra USDT", desc: "Usas USD del banco para comprar USDT y reiniciar el ciclo." },
+  entrada_capital: { label: "Entrada de capital", short: "Capital +", desc: "Un socio inyecta capital a la sociedad." },
+  retiro_socio:    { label: "Retiro de socio", short: "Retiro", desc: "Un socio retira dinero (de su ganancia o de su capital)." },
+  capitalizar:     { label: "Capitalizar ganancia", short: "Capitalizar", desc: "Reinvierte ganancia acumulada de un socio como capital aportado. No mueve dinero, solo formaliza la reinversión." },
+  ajuste:          { label: "Ajuste manual", short: "Ajuste", desc: "Corrección o movimiento que no encaja en los demás tipos." },
+};
+
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const hoy = () => new Date().toISOString().slice(0, 10);
+const fmt = (n, d = 2) =>
+  (n === null || n === undefined || isNaN(n)) ? "—" :
+  Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtDate = (iso) => {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y.slice(2)}`;
+};
+const diasDesde = (iso) => Math.floor((Date.now() - new Date(iso + "T12:00:00").getTime()) / 86400000);
+const fmtMoneda = (n, cuenta) => cuenta === "usdt" ? `${fmt(n, 4)} USDT` : `$${fmt(n, 2)}`;
+
+/* ============================== Cálculo de operaciones ============================== */
+function calcularOp(tipo, f) {
+  const m = (k) => parseFloat(f[k]) || 0;
+  switch (tipo) {
+    case "compra_usd": {
+      const usd = m("montoUSD"), tc = m("tasaCliente"), tb = m("tasaBinance");
+      const bs = usd * tc;
+      const usdtVend = tb > 0 ? bs / tb + FEE_P2P : 0;
+      const feeIn = f.metodo === "Wire" ? FEE_WIRE_IN : 0;
+      const ganancia = usd - usdtVend - feeIn;
+      return {
+        resumen: `$${fmt(usd)} → Bs ${fmt(bs, 0)} · vendes ${fmt(usdtVend)} USDT`,
+        bs, usdtVend, ganancia, roi: usdtVend > 0 ? ganancia / usdtVend : 0,
+        delta: { usdt: -usdtVend, banco: 0, efectivo: 0 },
+        cobro: { cuenta: f.metodo === "Efectivo" ? "efectivo" : "banco", monto: usd - feeIn },
+      };
+    }
+    case "venta_usdt": {
+      const u = m("montoUSDT"), pct = m("pct");
+      const feeIn = f.metodo === "Wire" ? FEE_WIRE_IN : 0;
+      const feeP2P = f.viaP2P ? FEE_P2P : 0;
+      const bruto = u * (1 + pct / 100);
+      const ganancia = u * (pct / 100) - feeIn - feeP2P;
+      return {
+        resumen: `${fmt(u)} USDT al ${pct}% → recibes $${fmt(bruto - feeIn)}`,
+        ganancia, roi: u > 0 ? ganancia / u : 0,
+        delta: { usdt: -(u + feeP2P), banco: 0, efectivo: 0 },
+        cobro: { cuenta: f.metodo === "Efectivo" ? "efectivo" : "banco", monto: bruto - feeIn },
+      };
+    }
+    case "venta_efectivo": {
+      const monto = m("montoEfectivo"), pct = m("pctComision"), miPct = m("miPct");
+      const comision = monto * pct / 100;
+      const miParte = comision * miPct / 100;
+      const tercero = comision - miParte;
+      return {
+        resumen: `$${fmt(monto)} efectivo al ${pct}% · tu parte $${fmt(miParte)}`,
+        ganancia: miParte, tercero, terceroNombre: f.terceroNombre || "Socio externo",
+        delta: { usdt: 0, banco: 0, efectivo: -monto },
+        cobro: { cuenta: "banco", monto: monto + comision },
+      };
+    }
+    case "retiro_efectivo": {
+      const monto = m("monto");
+      const fee = f.metodo === "Wire" ? FEE_WIRE_OUT : 0;
+      return {
+        resumen: `Banco → efectivo $${fmt(monto)}${fee ? ` (fee $${fee})` : ""}`,
+        ganancia: -fee,
+        delta: { usdt: 0, banco: -(monto + fee), efectivo: monto },
+      };
+    }
+    case "recompra_usdt": {
+      const usd = m("montoUSD");
+      const usdt = f.usdtRecibidos !== "" && f.usdtRecibidos !== undefined ? m("usdtRecibidos") : usd;
+      const fee = f.metodo === "Wire" ? FEE_WIRE_OUT : 0;
+      return {
+        resumen: `$${fmt(usd)} → ${fmt(usdt)} USDT${fee ? ` (fee $${fee})` : ""}`,
+        ganancia: usdt - usd - fee,
+        delta: { usdt: usdt, banco: -(usd + fee), efectivo: 0 },
+      };
+    }
+    case "entrada_capital": {
+      const monto = m("monto");
+      const d = { usdt: 0, banco: 0, efectivo: 0 };
+      d[f.cuenta || "banco"] = monto;
+      return { resumen: `+${fmtMoneda(monto, f.cuenta)} de capital (${f.cuenta})`, ganancia: 0, delta: d, monto };
+    }
+    case "retiro_socio": {
+      const monto = m("monto");
+      const d = { usdt: 0, banco: 0, efectivo: 0 };
+      d[f.cuenta || "banco"] = -monto;
+      return { resumen: `−${fmtMoneda(monto, f.cuenta)} retiro (${f.cuenta})`, ganancia: 0, delta: d, monto };
+    }
+    case "capitalizar": {
+      const monto = m("monto");
+      return { resumen: `Reinvierte $${fmt(monto)} de ganancia como capital`, ganancia: 0, monto, delta: { usdt: 0, banco: 0, efectivo: 0 } };
+    }
+    case "ajuste": {
+      const monto = m("monto");
+      const d = { usdt: 0, banco: 0, efectivo: 0 };
+      d[f.cuenta || "banco"] = monto;
+      return {
+        resumen: `Ajuste ${monto >= 0 ? "+" : ""}${fmt(monto)} en ${f.cuenta}`,
+        ganancia: f.afectaGanancia ? monto : 0, delta: d,
+      };
+    }
+    default: return null;
+  }
+}
+
+/* ============================== Replay del libro ============================== */
+function computeLibro(soc, opsAll) {
+  const ops = opsAll
+    .filter((o) => o.socId === soc.id)
+    .sort((a, b) => (a.fecha === b.fecha ? a.creado - b.creado : a.fecha < b.fecha ? -1 : 1));
+
+  let usdt = soc.saldos?.usdt || 0, banco = soc.saldos?.banco || 0, efectivo = soc.saldos?.efectivo || 0;
+  const socios = soc.socios.map((s) => ({
+    ...s,
+    aportado: s.aporteInicial || 0,
+    retirado: 0,
+    gananciaAcum: 0,
+    cuotas: soc.modo === "cuotas" ? (s.aporteInicial || 0) : 0,
+  }));
+  let gananciaTotal = 0;
+  let porCobrar = 0;
+  const alertas = [];
+  const terceros = {};
+
+  const patrimonio = () => usdt + banco + efectivo + porCobrar;
+  const cuotasTot = () => socios.reduce((a, s) => a + s.cuotas, 0);
+  const nav = () => (cuotasTot() > 0 ? patrimonio() / cuotasTot() : 1);
+
+  const distribuir = (g) => {
+    gananciaTotal += g;
+    if (soc.modo !== "cuotas") socios.forEach((s) => (s.gananciaAcum += g * (s.pct || 0) / 100));
+  };
+
+  for (const op of ops) {
+    const c = op.calc || {};
+    const d = c.delta || { usdt: 0, banco: 0, efectivo: 0 };
+
+    if (op.tipo === "entrada_capital") {
+      const socio = socios.find((s) => s.id === op.form.socioId);
+      if (socio) {
+        if (soc.modo === "cuotas") {
+          const v = nav();
+          socio.cuotas += c.monto / (v > 0 ? v : 1);
+        }
+        socio.aportado += c.monto;
+      }
+      usdt += d.usdt; banco += d.banco; efectivo += d.efectivo;
+      continue;
+    }
+
+    if (op.tipo === "retiro_socio") {
+      const socio = socios.find((s) => s.id === op.form.socioId);
+      if (socio) {
+        if (soc.modo === "cuotas") {
+          const v = nav();
+          socio.cuotas -= c.monto / (v > 0 ? v : 1);
+          socio.retirado += c.monto;
+          if (socio.cuotas < -0.01) alertas.push({ opId: op.id, msg: `${socio.nombre} retiró más que el valor de su participación` });
+        } else {
+          if (op.form.origen === "capital") {
+            socio.aportado -= c.monto;
+          } else {
+            const deG = Math.min(c.monto, Math.max(socio.gananciaAcum, 0));
+            socio.gananciaAcum -= deG;
+            const deC = c.monto - deG;
+            socio.aportado -= deC;
+            if (socio.aportado < -0.01) alertas.push({ opId: op.id, msg: `${socio.nombre} ha retirado más que su ganancia + capital; revisa este retiro` });
+          }
+          socio.retirado += c.monto;
+        }
+      }
+      usdt += d.usdt; banco += d.banco; efectivo += d.efectivo;
+      continue;
+    }
+
+    if (op.tipo === "capitalizar") {
+      const socio = socios.find((s) => s.id === op.form.socioId);
+      if (socio) {
+        socio.gananciaAcum -= c.monto;
+        socio.aportado += c.monto;
+        if (socio.gananciaAcum < -0.01) alertas.push({ opId: op.id, msg: `${socio.nombre} capitalizó más ganancia de la disponible` });
+      }
+      continue;
+    }
+
+    usdt += d.usdt; banco += d.banco; efectivo += d.efectivo;
+
+    if (c.cobro) {
+      if (op.estatus === "Completado") {
+        if (c.cobro.cuenta === "efectivo") efectivo += c.cobro.monto;
+        else banco += c.cobro.monto;
+      } else {
+        porCobrar += c.cobro.monto;
+      }
+    }
+
+    if (op.tipo === "venta_efectivo" && c.tercero > 0) {
+      if (op.form.terceroPagado) {
+        banco -= c.tercero;
+      } else {
+        const n = c.terceroNombre || "Socio externo";
+        terceros[n] = (terceros[n] || 0) + c.tercero;
+      }
+    }
+    if (c.ganancia) distribuir(c.ganancia);
+  }
+
+  const v = nav();
+  const sociosOut = socios.map((s) => {
+    if (soc.modo === "cuotas") {
+      const valor = s.cuotas * v;
+      return { ...s, valor, participacion: cuotasTot() > 0 ? (s.cuotas / cuotasTot()) * 100 : 0, ganancia: valor + s.retirado - s.aportado };
+    }
+    return { ...s, participacion: s.pct || 0, ganancia: s.gananciaAcum };
+  });
+
+  return {
+    usdt, banco, efectivo, porCobrar, patrimonio: patrimonio(), gananciaTotal,
+    socios: sociosOut, nav: v, cuotasTot: cuotasTot(), alertas, terceros, ops,
+  };
+}
+
+/* ============================== UI base ============================== */
+const Field = ({ label, children, hint }) => (
+  <label className="block mb-3">
+    <span className="block text-xs font-semibold tracking-wide text-stone-500 uppercase mb-1">{label}</span>
+    {children}
+    {hint && <span className="block text-xs text-stone-400 mt-1">{hint}</span>}
+  </label>
+);
+
+const inputCls = "w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-[15px] text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600";
+
+const Num = (props) => <input type="number" inputMode="decimal" step="any" className={inputCls} {...props} />;
+
+const Seg = ({ opciones, value, onChange }) => (
+  <div className="flex flex-wrap gap-1.5">
+    {opciones.map((o) => (
+      <button key={o.v} type="button" onClick={() => onChange(o.v)}
+        className={`px-3 py-1.5 rounded-full text-[13px] font-medium border transition-colors ${
+          value === o.v ? "bg-emerald-800 text-white border-emerald-800" : "bg-white text-stone-600 border-stone-300"}`}>
+        {o.t}
+      </button>
+    ))}
+  </div>
+);
+
+const Badge = ({ tone, children }) => {
+  const tones = {
+    ok: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    warn: "bg-amber-50 text-amber-700 border-amber-200",
+    bad: "bg-red-50 text-red-700 border-red-200",
+    dim: "bg-stone-100 text-stone-500 border-stone-200",
+  };
+  return <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold border ${tones[tone] || tones.dim}`}>{children}</span>;
+};
+
+/* ============================== Modal Nueva Operación ============================== */
+function NuevaOpModal({ soc, libro, clientes, prefill, onSave, onClose }) {
+  const [tipo, setTipo] = useState(prefill?.tipo || null);
+  const [form, setForm] = useState({
+    fecha: hoy(), metodo: "Zelle", estatus: "Completado", cuenta: "banco",
+    miPct: "50", viaP2P: true, origen: "ganancia", afectaGanancia: false,
+    socioId: prefill?.socioId || soc.socios[0]?.id, ...(prefill?.form || {}),
+  });
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const calc = tipo ? calcularOp(tipo, form) : null;
+
+  const guardar = () => {
+    if (!tipo || !calc) return;
+    const cliente = (form.cliente || "").trim();
+    const emisor = form.emisorMismo ? cliente : (form.emisor || "").trim();
+    onSave({
+      id: uid(), socId: soc.id, tipo, fecha: form.fecha || hoy(), creado: Date.now(),
+      form: { ...form, emisor }, calc, estatus: form.estatus,
+      cliente,
+      obs: (form.obs || "").trim(),
+    });
+    onClose();
+  };
+
+  const conCliente = ["compra_usd", "venta_usdt", "venta_efectivo"].includes(tipo);
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/40" onClick={onClose}>
+      <div className="min-h-full flex items-end sm:items-center justify-center sm:py-8">
+        <div className="w-full sm:max-w-lg bg-stone-50 rounded-t-2xl sm:rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 z-10 bg-stone-50 border-b border-stone-200 px-5 py-4 flex items-center justify-between rounded-t-2xl">
+          <h2 className="font-bold text-stone-900" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>
+            {tipo ? TIPOS[tipo].label : "Nueva operación"}
+          </h2>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-stone-200"><X size={18} /></button>
+        </div>
+
+        <div className="p-5">
+          {!tipo && (
+            <div className="grid gap-2">
+              {Object.entries(TIPOS).filter(([k]) => !(k === "capitalizar" && soc.modo === "cuotas")).map(([k, t]) => (
+                <button key={k} onClick={() => setTipo(k)}
+                  className="text-left rounded-xl border border-stone-200 bg-white px-4 py-3 hover:border-emerald-600 transition-colors">
+                  <div className="font-semibold text-stone-900 text-[15px]">{t.label}</div>
+                  <div className="text-[13px] text-stone-500 mt-0.5">{t.desc}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {tipo && (
+            <div>
+              <button onClick={() => setTipo(null)} className="text-[13px] text-emerald-700 font-semibold mb-3">← Cambiar tipo</button>
+
+              <Field label="Fecha"><input type="date" className={inputCls} value={form.fecha} onChange={(e) => set("fecha", e.target.value)} /></Field>
+
+              {conCliente && (
+                <Field label="Cliente">
+                  <input className={inputCls} list="lista-clientes" value={form.cliente || ""} placeholder="Nombre del cliente"
+                    onChange={(e) => set("cliente", e.target.value)} />
+                  <datalist id="lista-clientes">{clientes.map((c) => <option key={c} value={c} />)}</datalist>
+                </Field>
+              )}
+
+              {tipo === "compra_usd" && (<>
+                <Field label="Monto USD que recibes"><Num value={form.montoUSD || ""} onChange={(e) => set("montoUSD", e.target.value)} /></Field>
+                <Field label="Método de pago del cliente"><Seg opciones={METODOS.map((m) => ({ v: m, t: m }))} value={form.metodo} onChange={(v) => set("metodo", v)} /></Field>
+                <Field label="Tasa acordada con el cliente (Bs/USD)"><Num value={form.tasaCliente || ""} onChange={(e) => set("tasaCliente", e.target.value)} /></Field>
+                <Field label="Tasa de venta en Binance (Bs/USDT)"><Num value={form.tasaBinance || ""} onChange={(e) => set("tasaBinance", e.target.value)} /></Field>
+              </>)}
+
+              {tipo === "venta_usdt" && (<>
+                <Field label="USDT que vendes"><Num value={form.montoUSDT || ""} onChange={(e) => set("montoUSDT", e.target.value)} /></Field>
+                <Field label="Comisión que cobras (%)" hint="Normalmente 1.5%–3%"><Num value={form.pct || ""} onChange={(e) => set("pct", e.target.value)} /></Field>
+                <Field label="Cómo recibes el pago"><Seg opciones={METODOS.map((m) => ({ v: m, t: m }))} value={form.metodo} onChange={(v) => set("metodo", v)} /></Field>
+                <Field label="¿Venta por P2P de Binance?" hint="Aplica la comisión de 0.06 USDT">
+                  <Seg opciones={[{ v: true, t: "Sí" }, { v: false, t: "No (transferencia directa)" }]} value={form.viaP2P} onChange={(v) => set("viaP2P", v)} />
+                </Field>
+              </>)}
+
+              {tipo === "venta_efectivo" && (<>
+                <Field label="Efectivo que entregas (USD)"><Num value={form.montoEfectivo || ""} onChange={(e) => set("montoEfectivo", e.target.value)} /></Field>
+                <Field label="Comisión sobre el efectivo (%)"><Num value={form.pctComision || ""} onChange={(e) => set("pctComision", e.target.value)} /></Field>
+                <Field label="Tu parte de la comisión (%)" hint="50 si la divides a la mitad con quien consigue al cliente"><Num value={form.miPct || ""} onChange={(e) => set("miPct", e.target.value)} /></Field>
+                <Field label="Nombre del socio externo"><input className={inputCls} value={form.terceroNombre || ""} onChange={(e) => set("terceroNombre", e.target.value)} placeholder="Ej: Andrés" /></Field>
+                <Field label="¿Ya le pagaste su parte?">
+                  <Seg opciones={[{ v: false, t: "No, queda pendiente" }, { v: true, t: "Sí, ya descontado" }]} value={!!form.terceroPagado} onChange={(v) => set("terceroPagado", v)} />
+                </Field>
+              </>)}
+
+              {tipo === "retiro_efectivo" && (<>
+                <Field label="Monto (USD)"><Num value={form.monto || ""} onChange={(e) => set("monto", e.target.value)} /></Field>
+                <Field label="Método de salida del banco" hint="Wire emitido cobra $30">
+                  <Seg opciones={[{ v: "Zelle", t: "Zelle" }, { v: "Transferencia BofA", t: "BofA" }, { v: "Wire", t: "Wire ($30)" }]} value={form.metodo} onChange={(v) => set("metodo", v)} />
+                </Field>
+              </>)}
+
+              {tipo === "recompra_usdt" && (<>
+                <Field label="USD que pagas"><Num value={form.montoUSD || ""} onChange={(e) => set("montoUSD", e.target.value)} /></Field>
+                <Field label="USDT que recibes" hint="Déjalo vacío si es 1:1"><Num value={form.usdtRecibidos ?? ""} onChange={(e) => set("usdtRecibidos", e.target.value)} placeholder={form.montoUSD || "1:1"} /></Field>
+                <Field label="Método de pago" hint="Wire emitido cobra $30">
+                  <Seg opciones={[{ v: "Zelle", t: "Zelle" }, { v: "Transferencia BofA", t: "BofA" }, { v: "Wire", t: "Wire ($30)" }]} value={form.metodo} onChange={(v) => set("metodo", v)} />
+                </Field>
+              </>)}
+
+              {(tipo === "entrada_capital" || tipo === "retiro_socio") && (() => {
+                const s = libro?.socios.find((x) => x.id === form.socioId);
+                const monto = parseFloat(form.monto) || 0;
+                const esRetiro = tipo === "retiro_socio";
+                const esCuotas = soc.modo === "cuotas";
+                const cuentas = [
+                  { v: "banco", t: "Banco", saldo: libro?.banco ?? 0 },
+                  { v: "usdt", t: "USDT", saldo: libro?.usdt ?? 0 },
+                  { v: "efectivo", t: "Efectivo", saldo: libro?.efectivo ?? 0 },
+                ];
+                const saldoSel = cuentas.find((c) => c.v === form.cuenta)?.saldo ?? 0;
+
+                let maxRetiro = 0, gDisp = 0, deGanancia = 0, deCapital = 0, partNueva = null;
+                if (esRetiro && s) {
+                  if (esCuotas) {
+                    maxRetiro = s.valor || 0;
+                    const nav = libro.nav > 0 ? libro.nav : 1;
+                    const burn = monto / nav;
+                    const restantes = Math.max(s.cuotas - burn, 0);
+                    const totRest = libro.cuotasTot - burn;
+                    partNueva = totRest > 0 ? (restantes / totRest) * 100 : 0;
+                  } else {
+                    gDisp = Math.max(s.ganancia, 0);
+                    maxRetiro = gDisp + s.aportado;
+                    deGanancia = Math.min(monto, gDisp);
+                    deCapital = Math.max(monto - deGanancia, 0);
+                  }
+                }
+
+                return (<>
+                  <Field label="Socio">
+                    <select className={inputCls} value={form.socioId} onChange={(e) => set("socioId", e.target.value)}>
+                      {soc.socios.map((x) => <option key={x.id} value={x.id}>{x.nombre}</option>)}
+                    </select>
+                  </Field>
+
+                  {esRetiro && s && (
+                    <div className="rounded-xl bg-white border border-stone-200 p-3.5 mb-3">
+                      <div className="text-[11px] uppercase tracking-wide text-stone-400 font-semibold mb-2">Posición de {s.nombre}</div>
+                      <div className="grid grid-cols-2 gap-y-1 text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                        {esCuotas ? (<>
+                          <span className="text-stone-400">Participación</span><span className="text-right">{fmt(s.participacion, 1)}%</span>
+                          <span className="text-stone-400">Capital aportado</span><span className="text-right">${fmt(s.aportado)}</span>
+                          <span className="text-stone-400">Ganancia generada</span><span className="text-right text-emerald-700">${fmt(s.ganancia)}</span>
+                          <span className="text-stone-500 font-bold">Puede retirar hasta</span><span className="text-right font-bold text-stone-900">${fmt(maxRetiro)}</span>
+                        </>) : (<>
+                          <span className="text-stone-400">Ganancia disponible</span><span className="text-right text-emerald-700">${fmt(gDisp)}</span>
+                          <span className="text-stone-400">Capital aportado</span><span className="text-right">${fmt(s.aportado)}</span>
+                          <span className="text-stone-500 font-bold">Puede retirar hasta</span><span className="text-right font-bold text-stone-900">${fmt(maxRetiro)}</span>
+                        </>)}
+                      </div>
+                    </div>
+                  )}
+
+                  <Field label={esRetiro ? "¿De dónde sale el dinero?" : "¿A dónde entra el dinero?"}>
+                    <div className="grid grid-cols-3 gap-2">
+                      {cuentas.map((c) => (
+                        <button key={c.v} type="button" onClick={() => set("cuenta", c.v)}
+                          className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${
+                            form.cuenta === c.v ? "border-emerald-700 bg-emerald-50" : "border-stone-300 bg-white"}`}>
+                          <div className={`text-[13px] font-bold ${form.cuenta === c.v ? "text-emerald-800" : "text-stone-700"}`}>{c.t}</div>
+                          <div className="text-[11px] text-stone-500 mt-0.5 break-all" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{fmtMoneda(c.saldo, c.v)}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+
+                  <Field label={`Monto (${form.cuenta === "usdt" ? "USDT" : "USD"})`}><Num value={form.monto || ""} onChange={(e) => set("monto", e.target.value)} /></Field>
+
+                  {esRetiro && monto > 0 && s && (
+                    <div className="rounded-xl border border-stone-200 bg-white p-3.5 mb-3 grid gap-1 text-[13px]">
+                      {monto > saldoSel + 0.005 && (
+                        <div className="flex items-center gap-1.5 text-red-600 font-semibold"><AlertTriangle size={14} /> En {cuentas.find((c) => c.v === form.cuenta)?.t.toLowerCase()} solo hay {fmtMoneda(saldoSel, form.cuenta)}. Elige otra cuenta o divide el retiro.</div>
+                      )}
+                      {monto > maxRetiro + 0.005 && (
+                        <div className="flex items-center gap-1.5 text-red-600 font-semibold"><AlertTriangle size={14} /> Excede lo que le corresponde a {s.nombre} (${fmt(maxRetiro)}).</div>
+                      )}
+                      {!esCuotas && monto <= maxRetiro + 0.005 && (<>
+                        <div className="text-stone-600">De su ganancia: <b className="text-emerald-700" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>${fmt(deGanancia)}</b></div>
+                        {deCapital > 0 && (
+                          <div className="text-stone-600">De su capital: <b className="text-amber-700" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>${fmt(deCapital)}</b> — su capital queda en <b style={{ fontFamily: "'IBM Plex Mono',monospace" }}>${fmt(s.aportado - deCapital)}</b></div>
+                        )}
+                      </>)}
+                      {esCuotas && monto <= maxRetiro + 0.005 && partNueva !== null && (
+                        <div className="text-stone-600">Su participación pasa de <b>{fmt(s.participacion, 1)}%</b> a <b className="text-amber-700">{fmt(partNueva, 1)}%</b> y los siguientes repartos se ajustan solos.</div>
+                      )}
+                    </div>
+                  )}
+                </>);
+              })()}
+
+              {tipo === "capitalizar" && (() => {
+                const s = libro?.socios.find((x) => x.id === form.socioId);
+                const gDisp = s ? Math.max(s.ganancia, 0) : 0;
+                const monto = parseFloat(form.monto) || 0;
+                return (<>
+                  <Field label="Socio">
+                    <select className={inputCls} value={form.socioId} onChange={(e) => set("socioId", e.target.value)}>
+                      {soc.socios.map((x) => <option key={x.id} value={x.id}>{x.nombre}</option>)}
+                    </select>
+                  </Field>
+                  {s && (
+                    <div className="rounded-xl bg-white border border-stone-200 p-3.5 mb-3 grid grid-cols-2 gap-y-1 text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                      <span className="text-stone-400">Ganancia disponible</span><span className="text-right text-emerald-700">${fmt(gDisp)}</span>
+                      <span className="text-stone-400">Capital actual</span><span className="text-right">${fmt(s.aportado)}</span>
+                      {monto > 0 && monto <= gDisp + 0.005 && (<>
+                        <span className="text-stone-500 font-bold">Capital después</span><span className="text-right font-bold">${fmt(s.aportado + monto)}</span>
+                      </>)}
+                    </div>
+                  )}
+                  <Field label="Monto a capitalizar (USD)">
+                    <Num value={form.monto || ""} onChange={(e) => set("monto", e.target.value)} />
+                    <button type="button" onClick={() => set("monto", gDisp.toFixed(2))}
+                      className="mt-2 text-[13px] text-emerald-700 font-semibold">Usar toda la ganancia (${fmt(gDisp)})</button>
+                  </Field>
+                  {monto > gDisp + 0.005 && (
+                    <div className="flex items-center gap-1.5 text-red-600 font-semibold text-[13px] mb-3"><AlertTriangle size={14} /> Excede la ganancia disponible de {s?.nombre}.</div>
+                  )}
+                </>);
+              })()}
+
+              {tipo === "ajuste" && (<>
+                <Field label="Monto (positivo suma, negativo resta)"><Num value={form.monto || ""} onChange={(e) => set("monto", e.target.value)} /></Field>
+                <Field label="Cuenta">
+                  <Seg opciones={[{ v: "banco", t: "Banco" }, { v: "usdt", t: "USDT" }, { v: "efectivo", t: "Efectivo" }]} value={form.cuenta} onChange={(v) => set("cuenta", v)} />
+                </Field>
+                <Field label="¿Cuenta como ganancia/pérdida?">
+                  <Seg opciones={[{ v: false, t: "No" }, { v: true, t: "Sí" }]} value={!!form.afectaGanancia} onChange={(v) => set("afectaGanancia", v)} />
+                </Field>
+              </>)}
+
+              {conCliente && (<>
+                <Field label="Estatus" hint="Pendiente = el cliente aún no te ha pagado; el monto queda en Por Cobrar">
+                  <Seg opciones={[{ v: "Completado", t: "Ya me pagó" }, { v: "Pendiente", t: "Pendiente de pago" }]} value={form.estatus} onChange={(v) => set("estatus", v)} />
+                </Field>
+                {form.estatus === "Completado" && (<>
+                  <Field label="¿Quién te envió el dinero?" hint="Puede ser una empresa u otra persona distinta al cliente">
+                    <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+                      <input type="checkbox" className="w-4 h-4 accent-emerald-700" checked={!!form.emisorMismo}
+                        onChange={(e) => set("emisorMismo", e.target.checked)} />
+                      <span className="text-[14px] text-stone-700">Es el mismo cliente{form.cliente ? ` (${form.cliente})` : ""}</span>
+                    </label>
+                    {!form.emisorMismo && (
+                      <input className={inputCls} value={form.emisor || ""} onChange={(e) => set("emisor", e.target.value)} placeholder="Nombre del emisor del pago" />
+                    )}
+                  </Field>
+                  <Field label="Referencia bancaria">
+                    <input className={inputCls} value={form.referencia || ""} onChange={(e) => set("referencia", e.target.value)} placeholder="Ref. que emite el banco" />
+                  </Field>
+                </>)}
+              </>)}
+
+              <Field label="Observaciones (opcional)">
+                <input className={inputCls} value={form.obs || ""} onChange={(e) => set("obs", e.target.value)} />
+              </Field>
+
+              {calc && (
+                <div className="rounded-xl bg-emerald-900 text-emerald-50 px-4 py-3 mt-2" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                  <div className="text-[13px] opacity-80">{calc.resumen}</div>
+                  {"ganancia" in calc && (
+                    <div className={`text-lg font-bold mt-1 ${calc.ganancia < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                      {tipo === "entrada_capital" || tipo === "retiro_socio" ? `$${fmt(calc.monto)}` : `Ganancia: $${fmt(calc.ganancia)}`}
+                      {calc.roi ? <span className="text-[12px] font-normal opacity-70 ml-2">ROI {fmt(calc.roi * 100)}%</span> : null}
+                    </div>
+                  )}
+                  {calc.tercero > 0 && !form.terceroPagado && (
+                    <div className="text-[12px] text-amber-300 mt-1">Por pagar a {calc.terceroNombre}: ${fmt(calc.tercero)}</div>
+                  )}
+                </div>
+              )}
+
+              <button onClick={guardar}
+                className="w-full mt-4 rounded-xl bg-emerald-800 text-white font-bold py-3 text-[15px] active:scale-[0.99] transition-transform">
+                Guardar operación
+              </button>
+            </div>
+          )}
+        </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== Modal Detalle de Operación ============================== */
+function DetalleOpModal({ op, soc, onClose, onCompletar, onTogglePagado, onDelete }) {
+  const f = op.form || {}, c = op.calc || {};
+  const socioNombre = f.socioId ? soc.socios.find((s) => s.id === f.socioId)?.nombre : null;
+  const filas = [];
+  const add = (l, v) => { if (v !== undefined && v !== null && v !== "") filas.push([l, v]); };
+
+  add("Cliente", op.cliente);
+  add("Emisor del pago", f.emisor);
+  add("Referencia", f.referencia);
+  add("Socio", socioNombre);
+  if (["compra_usd", "venta_usdt", "retiro_efectivo", "recompra_usdt"].includes(op.tipo)) add("Método", f.metodo);
+
+  if (op.tipo === "compra_usd") {
+    add("USD recibidos", `$${fmt(parseFloat(f.montoUSD) || 0)}`);
+    add("Tasa cliente", `${fmt(parseFloat(f.tasaCliente) || 0)} Bs/USD`);
+    add("Tasa Binance", `${fmt(parseFloat(f.tasaBinance) || 0)} Bs/USDT`);
+    add("Bs pagados", `Bs ${fmt(c.bs, 2)}`);
+    add("USDT vendidos", `${fmt(c.usdtVend)} (incluye 0.06 P2P)`);
+    if (f.metodo === "Wire") add("Comisión wire recibido", `$${FEE_WIRE_IN}`);
+  }
+  if (op.tipo === "venta_usdt") {
+    add("USDT vendidos", fmt(parseFloat(f.montoUSDT) || 0));
+    add("Comisión cobrada", `${f.pct}%`);
+    add("Vía P2P Binance", f.viaP2P ? `Sí (fee ${FEE_P2P} USDT)` : "No");
+    if (f.metodo === "Wire") add("Comisión wire recibido", `$${FEE_WIRE_IN}`);
+    if (c.cobro) add("Total a recibir", `$${fmt(c.cobro.monto)}`);
+  }
+  if (op.tipo === "venta_efectivo") {
+    add("Efectivo entregado", `$${fmt(parseFloat(f.montoEfectivo) || 0)}`);
+    add("Comisión", `${f.pctComision}% (tu parte ${f.miPct}%)`);
+    if (c.cobro) add("Total que depositan", `$${fmt(c.cobro.monto)}`);
+    if (c.tercero > 0) add(`Parte de ${c.terceroNombre}`, `$${fmt(c.tercero)} · ${f.terceroPagado ? "pagada ✓" : "por pagar"}`);
+  }
+  if (op.tipo === "retiro_efectivo" || op.tipo === "recompra_usdt") {
+    add("Monto", `$${fmt(parseFloat(f.montoUSD ?? f.monto) || 0)}`);
+    if (op.tipo === "recompra_usdt") add("USDT recibidos", fmt(f.usdtRecibidos !== "" && f.usdtRecibidos !== undefined ? parseFloat(f.usdtRecibidos) : parseFloat(f.montoUSD) || 0));
+    if (f.metodo === "Wire") add("Comisión wire emitido", `$${FEE_WIRE_OUT}`);
+  }
+  if (["entrada_capital", "retiro_socio", "capitalizar", "ajuste"].includes(op.tipo)) {
+    const mnt = c.monto ?? parseFloat(f.monto) ?? 0;
+    add("Monto", op.tipo === "capitalizar" ? `$${fmt(mnt)}` : fmtMoneda(mnt, f.cuenta));
+    if (f.cuenta && op.tipo !== "capitalizar") add("Cuenta", f.cuenta === "usdt" ? "USDT" : f.cuenta);
+  }
+  add("Observaciones", op.obs);
+
+  const esCliente = ["compra_usd", "venta_usdt", "venta_efectivo"].includes(op.tipo);
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/40" onClick={onClose}>
+      <div className="min-h-full flex items-end sm:items-center justify-center sm:py-8">
+        <div className="w-full sm:max-w-md bg-stone-50 rounded-t-2xl sm:rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="px-5 py-4 border-b border-stone-200 flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-bold text-stone-900" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>{TIPOS[op.tipo].label}</h2>
+                {esCliente && (op.estatus === "Pendiente"
+                  ? <Badge tone={diasDesde(op.fecha) >= 2 ? "bad" : "warn"}>Pendiente{diasDesde(op.fecha) > 0 ? ` · ${diasDesde(op.fecha)}d` : ""}</Badge>
+                  : <Badge tone="ok">Pagado ✓</Badge>)}
+              </div>
+              <div className="text-[12px] text-stone-400 mt-0.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{fmtDate(op.fecha)}</div>
+            </div>
+            <button onClick={onClose} className="p-1.5 rounded-full hover:bg-stone-200"><X size={18} /></button>
+          </div>
+
+          <div className="p-5">
+            <div className="rounded-xl bg-white border border-stone-200 divide-y divide-stone-100">
+              {filas.map(([l, v]) => (
+                <div key={l} className="flex items-start justify-between gap-3 px-3.5 py-2.5">
+                  <span className="text-[12px] text-stone-400 uppercase tracking-wide font-semibold pt-0.5">{l}</span>
+                  <span className="text-[14px] text-stone-800 text-right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            {c.ganancia !== undefined && !["entrada_capital", "retiro_socio", "capitalizar"].includes(op.tipo) && (
+              <div className="rounded-xl bg-[#0C2A20] text-white px-4 py-3 mt-3 flex items-center justify-between" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                <span className="text-[12px] uppercase tracking-wide text-emerald-200/70">Ganancia</span>
+                <span className={`text-lg font-bold ${c.ganancia < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {c.ganancia >= 0 ? "+" : ""}${fmt(c.ganancia)}
+                  {c.roi ? <span className="text-[12px] font-normal opacity-70 ml-2">ROI {fmt(c.roi * 100)}%</span> : null}
+                </span>
+              </div>
+            )}
+
+            <div className="grid gap-2 mt-4">
+              {op.estatus === "Pendiente" && (
+                <button onClick={() => onCompletar(op.id)} className="w-full rounded-xl bg-emerald-800 text-white font-bold py-2.5 flex items-center justify-center gap-2">
+                  <CheckCircle2 size={16} /> Registrar pago recibido
+                </button>
+              )}
+              {op.tipo === "venta_efectivo" && c.tercero > 0 && (
+                <button onClick={() => onTogglePagado(op.id)}
+                  className={`w-full rounded-xl font-bold py-2.5 ${op.form.terceroPagado ? "border border-stone-300 text-stone-500" : "bg-amber-500 text-white"}`}>
+                  {op.form.terceroPagado ? `Desmarcar pago a ${c.terceroNombre}` : `Marcar pagado $${fmt(c.tercero)} a ${c.terceroNombre}`}
+                </button>
+              )}
+              <button onClick={() => { if (confirm("¿Eliminar esta operación? Los saldos se recalculan solos.")) onDelete(op.id); }}
+                className="w-full rounded-xl border border-red-200 text-red-600 font-semibold py-2.5 flex items-center justify-center gap-2">
+                <Trash2 size={15} /> Eliminar operación
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== Modal Completar con referencia ============================== */
+function CompletarModal({ op, onConfirm, onClose }) {
+  const [ref, setRef] = useState("");
+  const [emisor, setEmisor] = useState(op.form?.emisor || "");
+  const [mismo, setMismo] = useState(false);
+  const emisorFinal = mismo ? (op.cliente || "") : emisor.trim();
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/40" onClick={onClose}>
+      <div className="min-h-full flex items-end sm:items-center justify-center sm:py-8">
+        <div className="w-full sm:max-w-sm bg-stone-50 rounded-t-2xl sm:rounded-2xl shadow-2xl p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="font-bold text-stone-900 mb-1" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Confirmar pago recibido</h2>
+        <p className="text-[13px] text-stone-500 mb-4">
+          {op.cliente || "Operación"} · {fmtDate(op.fecha)}
+          {op.calc?.cobro && <span className="block font-semibold text-stone-700 mt-0.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>Entra ${fmt(op.calc.cobro.monto)} al {op.calc.cobro.cuenta === "efectivo" ? "efectivo" : "banco"}</span>}
+        </p>
+        <Field label="¿Quién te envió el dinero?" hint="Puede ser una empresa u otra persona distinta al cliente">
+          <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+            <input type="checkbox" className="w-4 h-4 accent-emerald-700" checked={mismo} onChange={(e) => setMismo(e.target.checked)} />
+            <span className="text-[14px] text-stone-700">Es el mismo cliente{op.cliente ? ` (${op.cliente})` : ""}</span>
+          </label>
+          {!mismo && (
+            <input className={inputCls} value={emisor} onChange={(e) => setEmisor(e.target.value)} placeholder="Nombre del emisor del pago" />
+          )}
+        </Field>
+        <Field label="Referencia bancaria">
+          <input className={inputCls} value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Ref. que emite el banco" />
+        </Field>
+        <div className="flex gap-2 mt-2">
+          <button onClick={onClose} className="flex-1 rounded-xl border border-stone-300 text-stone-600 font-semibold py-2.5">Cancelar</button>
+          <button onClick={() => onConfirm(ref.trim(), emisorFinal)} className="flex-1 rounded-xl bg-emerald-800 text-white font-bold py-2.5">Confirmar pago</button>
+        </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== Modal Nueva Sociedad ============================== */
+function SociedadModal({ onSave, onClose }) {
+  const [nombre, setNombre] = useState("");
+  const [modo, setModo] = useState("solo");
+  const [socios, setSocios] = useState([{ id: uid(), nombre: "Yo", pct: 100, aporteInicial: "" }]);
+  const [saldos, setSaldos] = useState({ usdt: "", banco: "", efectivo: "" });
+
+  const addSocio = () => setSocios((s) => [...s, { id: uid(), nombre: "", pct: "", aporteInicial: "" }]);
+  const setSocio = (id, k, v) => setSocios((s) => s.map((x) => (x.id === id ? { ...x, [k]: v } : x)));
+  const rmSocio = (id) => setSocios((s) => s.filter((x) => x.id !== id));
+
+  const pctTotal = socios.reduce((a, s) => a + (parseFloat(s.pct) || 0), 0);
+  const valido = nombre.trim() && socios.every((s) => s.nombre.trim()) &&
+    (modo !== "fijo" || Math.abs(pctTotal - 100) < 0.01);
+
+  const guardar = () => {
+    onSave({
+      id: uid(), nombre: nombre.trim(), modo: modo === "solo" ? "fijo" : modo,
+      socios: (modo === "solo" ? [{ ...socios[0], pct: 100 }] : socios).map((s) => ({
+        id: s.id, nombre: s.nombre.trim(),
+        pct: parseFloat(s.pct) || 0,
+        aporteInicial: parseFloat(s.aporteInicial) || 0,
+      })),
+      saldos: { usdt: parseFloat(saldos.usdt) || 0, banco: parseFloat(saldos.banco) || 0, efectivo: parseFloat(saldos.efectivo) || 0 },
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/40" onClick={onClose}>
+      <div className="min-h-full flex items-end sm:items-center justify-center sm:py-8">
+        <div className="w-full sm:max-w-lg bg-stone-50 rounded-t-2xl sm:rounded-2xl shadow-2xl p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-bold text-stone-900" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Nueva sociedad</h2>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-stone-200"><X size={18} /></button>
+        </div>
+
+        <Field label="Nombre de la sociedad">
+          <input className={inputCls} value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Negocio con papá" />
+        </Field>
+
+        <Field label="Modo de reparto">
+          <Seg opciones={[
+            { v: "solo", t: "Solo yo" },
+            { v: "fijo", t: "% fijo de ganancia" },
+            { v: "cuotas", t: "Participaciones (capital)" },
+          ]} value={modo} onChange={setModo} />
+          <p className="text-xs text-stone-500 mt-2">
+            {modo === "solo" && "Todo el capital y la ganancia son tuyos."}
+            {modo === "fijo" && "La ganancia se reparte con porcentajes fijos, sin importar cuánto capital puso cada uno. Ideal para el acuerdo con tu amigo (su capital, ganancia 50/50)."}
+            {modo === "cuotas" && "El capital se divide en cuotas que ganan valor con las ganancias. Los aportes compran cuotas al valor del momento, así los porcentajes se ajustan solos. Ideal para la sociedad con tu papá."}
+          </p>
+        </Field>
+
+        {modo !== "solo" && (
+          <Field label={modo === "fijo" ? "Socios y % de ganancia" : "Socios y aporte inicial (USD)"}>
+            <div className="grid gap-2">
+              {socios.map((s) => (
+                <div key={s.id} className="flex gap-2 items-center">
+                  <input className={inputCls} placeholder="Nombre" value={s.nombre} onChange={(e) => setSocio(s.id, "nombre", e.target.value)} />
+                  {modo === "fijo"
+                    ? <input type="number" inputMode="decimal" className={inputCls + " max-w-[90px]"} placeholder="%" value={s.pct} onChange={(e) => setSocio(s.id, "pct", e.target.value)} />
+                    : <input type="number" inputMode="decimal" className={inputCls + " max-w-[120px]"} placeholder="$ aporte" value={s.aporteInicial} onChange={(e) => setSocio(s.id, "aporteInicial", e.target.value)} />}
+                  {socios.length > 1 && <button onClick={() => rmSocio(s.id)} className="p-2 text-stone-400"><Trash2 size={16} /></button>}
+                </div>
+              ))}
+            </div>
+            <button onClick={addSocio} className="text-[13px] text-emerald-700 font-semibold mt-2">+ Agregar socio</button>
+            {modo === "fijo" && Math.abs(pctTotal - 100) > 0.01 && (
+              <p className="text-xs text-red-600 mt-1">Los porcentajes suman {pctTotal}% (deben sumar 100%)</p>
+            )}
+          </Field>
+        )}
+
+        <Field label="Saldos iniciales" hint={modo === "cuotas" ? "Lo ideal es que sumen igual que los aportes de los socios" : undefined}>
+          <div className="grid grid-cols-3 gap-2">
+            <div><span className="text-[11px] text-stone-500">USDT</span><Num value={saldos.usdt} onChange={(e) => setSaldos({ ...saldos, usdt: e.target.value })} /></div>
+            <div><span className="text-[11px] text-stone-500">Banco $</span><Num value={saldos.banco} onChange={(e) => setSaldos({ ...saldos, banco: e.target.value })} /></div>
+            <div><span className="text-[11px] text-stone-500">Efectivo $</span><Num value={saldos.efectivo} onChange={(e) => setSaldos({ ...saldos, efectivo: e.target.value })} /></div>
+          </div>
+        </Field>
+
+        <button disabled={!valido} onClick={guardar}
+          className="w-full mt-2 rounded-xl bg-emerald-800 disabled:bg-stone-300 text-white font-bold py-3 text-[15px]">
+          Crear sociedad
+        </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== Vistas ============================== */
+function TableroSaldos({ libro }) {
+  const filas = [
+    { icon: <Coins size={16} />, t: "USDT (Binance)", v: libro.usdt, c: "#4FD1A5" },
+    { icon: <Landmark size={16} />, t: "USD en banco", v: libro.banco, c: "#8FBFEA" },
+    { icon: <Banknote size={16} />, t: "USD efectivo", v: libro.efectivo, c: "#C9D77E" },
+    ...(libro.porCobrar > 0.005 ? [{ icon: <Bell size={16} />, t: "Por cobrar", v: libro.porCobrar, c: "#F0B860" }] : []),
+  ];
+  return (
+    <div className="rounded-2xl bg-[#0C2A20] text-white p-5 shadow-lg">
+      <div className="flex items-baseline justify-between mb-4">
+        <span className="text-[11px] uppercase tracking-[0.15em] text-emerald-200/70">Patrimonio</span>
+        <span className="text-2xl font-bold" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>${fmt(libro.patrimonio)}</span>
+      </div>
+      <div className="grid gap-2.5">
+        {filas.map((f) => (
+          <div key={f.t} className="flex items-center justify-between border-t border-white/10 pt-2.5">
+            <span className="flex items-center gap-2 text-[13px] text-emerald-100/80">{f.icon}{f.t}</span>
+            <span className="text-[16px] font-semibold" style={{ fontFamily: "'IBM Plex Mono',monospace", color: f.c }}>
+              {fmt(f.v, f.t.startsWith("USDT") ? 4 : 2)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Inicio({ soc, libro, ops }) {
+  const hace30 = Date.now() - 30 * 86400000;
+  const ops30 = libro.ops.filter((o) => new Date(o.fecha + "T12:00:00").getTime() >= hace30);
+  const negocio = ops30.filter((o) => !["entrada_capital", "retiro_socio", "ajuste"].includes(o.tipo));
+  const gan30 = negocio.reduce((a, o) => a + (o.calc?.ganancia || 0), 0);
+  const vol30 = negocio.reduce((a, o) => a + Math.abs(parseFloat(o.form.montoUSD) || parseFloat(o.form.montoUSDT) || parseFloat(o.form.montoEfectivo) || parseFloat(o.form.monto) || 0), 0);
+  const rois = negocio.map((o) => o.calc?.roi).filter((r) => r);
+  const roiProm = rois.length ? rois.reduce((a, b) => a + b, 0) / rois.length : 0;
+
+  const serie = useMemo(() => {
+    const porDia = {};
+    let acum = 0;
+    libro.ops.filter((o) => o.calc?.ganancia).forEach((o) => {
+      porDia[o.fecha] = (porDia[o.fecha] || 0) + o.calc.ganancia;
+    });
+    return Object.keys(porDia).sort().map((f) => {
+      acum += porDia[f];
+      return { f: fmtDate(f).slice(0, 5), g: Math.round(acum * 100) / 100 };
+    });
+  }, [libro.ops]);
+
+  const pendientes = libro.ops.filter((o) => o.estatus === "Pendiente").length;
+  const tercerosTotal = Object.values(libro.terceros).reduce((a, b) => a + b, 0);
+
+  return (
+    <div className="grid gap-4">
+      <TableroSaldos libro={libro} />
+
+      <div className="grid grid-cols-3 gap-2.5">
+        {[
+          { t: "Ganancia 30d", v: `$${fmt(gan30)}`, icon: <TrendingUp size={14} /> },
+          { t: "Volumen 30d", v: `$${fmt(vol30, 0)}`, icon: <ArrowLeftRight size={14} /> },
+          { t: "ROI promedio", v: `${fmt(roiProm * 100)}%`, icon: <CircleDollarSign size={14} /> },
+        ].map((k) => (
+          <div key={k.t} className="rounded-xl bg-white border border-stone-200 p-3">
+            <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-stone-400 font-semibold">{k.icon}{k.t}</div>
+            <div className="text-[15px] font-bold text-stone-900 mt-1" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {(pendientes > 0 || tercerosTotal > 0 || libro.alertas.length > 0) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 grid gap-1">
+          {pendientes > 0 && <div className="flex items-center gap-2 text-[13px] text-amber-800"><Bell size={14} /> {pendientes} cliente(s) por pagarte · ${fmt(libro.porCobrar)} por cobrar</div>}
+          {tercerosTotal > 0 && <div className="flex items-center gap-2 text-[13px] text-amber-800"><UserRound size={14} /> ${fmt(tercerosTotal)} por pagar a socios externos</div>}
+          {libro.alertas.map((a, i) => <div key={i} className="flex items-center gap-2 text-[13px] text-red-700"><AlertTriangle size={14} /> {a.msg}</div>)}
+        </div>
+      )}
+
+      {serie.length > 1 && (
+        <div className="rounded-xl bg-white border border-stone-200 p-4">
+          <div className="text-[11px] uppercase tracking-wide text-stone-400 font-semibold mb-2">Ganancia acumulada</div>
+          <div style={{ height: 160 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={serie} margin={{ top: 5, right: 5, bottom: 0, left: -18 }}>
+                <XAxis dataKey="f" tick={{ fontSize: 10 }} tickLine={false} axisLine={{ stroke: "#e7e5e4" }} />
+                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                <Tooltip formatter={(v) => [`$${fmt(v)}`, "Acumulado"]} />
+                <Line type="monotone" dataKey="g" stroke="#0E6B4E" strokeWidth={2.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl bg-white border border-stone-200 p-4">
+        <div className="text-[11px] uppercase tracking-wide text-stone-400 font-semibold mb-2">Socios</div>
+        {libro.socios.map((s) => (
+          <div key={s.id} className="flex items-center justify-between py-1.5 border-t border-stone-100 first:border-0">
+            <span className="text-[14px] text-stone-800">{s.nombre}</span>
+            <span className="text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+              <span className="text-stone-400">{fmt(s.participacion, 1)}%</span>
+              <span className={`ml-3 font-semibold ${s.ganancia < 0 ? "text-red-600" : "text-emerald-700"}`}>${fmt(s.ganancia)}</span>
+            </span>
+          </div>
+        ))}
+        {soc.modo === "cuotas" && (
+          <div className="text-[11px] text-stone-400 mt-2" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+            Valor de la cuota: ${fmt(libro.nav, 4)} · {fmt(libro.cuotasTot)} cuotas
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ListaOps({ libro, onDelete, onCompletar, onTogglePagado, onExport, onDetalle }) {
+  const [filtro, setFiltro] = useState("todas");
+  const ops = [...libro.ops].reverse().filter((o) => filtro === "todas" || o.tipo === filtro);
+  const tiposPresentes = [...new Set(libro.ops.map((o) => o.tipo))];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <button onClick={() => setFiltro("todas")} className={`px-3 py-1 rounded-full text-[12px] font-medium border whitespace-nowrap ${filtro === "todas" ? "bg-emerald-800 text-white border-emerald-800" : "bg-white text-stone-600 border-stone-300"}`}>Todas</button>
+          {tiposPresentes.map((t) => (
+            <button key={t} onClick={() => setFiltro(t)} className={`px-3 py-1 rounded-full text-[12px] font-medium border whitespace-nowrap ${filtro === t ? "bg-emerald-800 text-white border-emerald-800" : "bg-white text-stone-600 border-stone-300"}`}>{TIPOS[t].short}</button>
+          ))}
+        </div>
+        <button onClick={onExport} className="ml-2 shrink-0 p-2 rounded-lg border border-stone-300 bg-white text-stone-600" title="Exportar a Excel"><Download size={16} /></button>
+      </div>
+
+      {ops.length === 0 && <div className="text-center text-stone-400 text-[14px] py-10">Sin operaciones todavía. Toca el botón + para registrar la primera.</div>}
+
+      <div className="grid gap-2">
+        {ops.map((o) => (
+          <div key={o.id} onClick={() => onDetalle(o.id)}
+            className="rounded-xl bg-white border border-stone-200 p-3.5 cursor-pointer active:bg-stone-50 transition-colors">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-[14px] text-stone-900 truncate">{o.cliente || TIPOS[o.tipo].short}</span>
+                  <Badge tone="dim">{TIPOS[o.tipo].short}</Badge>
+                  {o.estatus === "Pendiente" && <Badge tone={diasDesde(o.fecha) >= 2 ? "bad" : "warn"}>Pendiente {diasDesde(o.fecha) > 0 ? `· ${diasDesde(o.fecha)}d` : ""}</Badge>}
+                </div>
+                <div className="text-[12px] text-stone-500 mt-0.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{fmtDate(o.fecha)} · {o.calc?.resumen}</div>
+                {(o.form.emisor || o.form.referencia) && (
+                  <div className="text-[11px] text-stone-400 mt-0.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                    {o.form.emisor && <span>Emisor: {o.form.emisor}</span>}
+                    {o.form.emisor && o.form.referencia && " · "}
+                    {o.form.referencia && <span>Ref: {o.form.referencia}</span>}
+                  </div>
+                )}
+                {o.obs && <div className="text-[12px] text-stone-400 italic mt-0.5">{o.obs}</div>}
+                {o.tipo === "venta_efectivo" && o.calc?.tercero > 0 && (
+                  <button onClick={(e) => { e.stopPropagation(); onTogglePagado(o.id); }} className="mt-1.5">
+                    <Badge tone={o.form.terceroPagado ? "ok" : "warn"}>
+                      {o.form.terceroPagado ? `✓ ${o.calc.terceroNombre} pagado` : `Pagar $${fmt(o.calc.tercero)} a ${o.calc.terceroNombre}`}
+                    </Badge>
+                  </button>
+                )}
+              </div>
+              <div className="text-right shrink-0">
+                {o.calc?.ganancia !== undefined && !["entrada_capital", "retiro_socio", "capitalizar"].includes(o.tipo) && (
+                  <div className={`font-bold text-[15px] ${o.calc.ganancia < 0 ? "text-red-600" : "text-emerald-700"}`} style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                    {o.calc.ganancia >= 0 ? "+" : ""}{fmt(o.calc.ganancia)}
+                  </div>
+                )}
+                <div className="flex gap-1 mt-1.5 justify-end">
+                  {o.estatus === "Pendiente" && (
+                    <button onClick={(e) => { e.stopPropagation(); onCompletar(o.id); }} className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700" title="Registrar pago"><CheckCircle2 size={16} /></button>
+                  )}
+                  <button onClick={(e) => { e.stopPropagation(); if (confirm("¿Eliminar esta operación? Los saldos se recalculan solos.")) onDelete(o.id); }}
+                    className="p-1.5 rounded-lg bg-stone-100 text-stone-400" title="Eliminar"><Trash2 size={16} /></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Clientes({ libro }) {
+  const [q, setQ] = useState("");
+  const agg = useMemo(() => {
+    const m = {};
+    libro.ops.filter((o) => o.cliente).forEach((o) => {
+      const c = (m[o.cliente] ||= { nombre: o.cliente, n: 0, vol: 0, gan: 0, ultima: o.fecha });
+      c.n += 1;
+      c.vol += Math.abs(parseFloat(o.form.montoUSD) || parseFloat(o.form.montoUSDT) || parseFloat(o.form.montoEfectivo) || 0);
+      c.gan += o.calc?.ganancia || 0;
+      if (o.fecha > c.ultima) c.ultima = o.fecha;
+    });
+    return Object.values(m).sort((a, b) => b.vol - a.vol);
+  }, [libro.ops]);
+
+  const lista = agg.filter((c) => c.nombre.toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div>
+      <input className={inputCls + " mb-3"} placeholder="Buscar cliente…" value={q} onChange={(e) => setQ(e.target.value)} />
+      {lista.length === 0 && <div className="text-center text-stone-400 text-[14px] py-10">Los clientes se crean solos al registrar operaciones con su nombre.</div>}
+      <div className="grid gap-2">
+        {lista.map((c) => (
+          <div key={c.nombre} className="rounded-xl bg-white border border-stone-200 p-3.5 flex items-center justify-between">
+            <div>
+              <div className="font-semibold text-[14px] text-stone-900">{c.nombre}</div>
+              <div className="text-[12px] text-stone-400">{c.n} ops · última {fmtDate(c.ultima)}</div>
+            </div>
+            <div className="text-right" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+              <div className="text-[13px] text-stone-500">${fmt(c.vol, 0)} vol</div>
+              <div className="text-[13px] font-semibold text-emerald-700">+${fmt(c.gan)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Socios({ soc, libro, onNuevaOp }) {
+  return (
+    <div className="grid gap-3">
+      <div className="rounded-xl bg-white border border-stone-200 p-4">
+        <div className="text-[13px] text-stone-500">
+          Modo de reparto: <b className="text-stone-800">{soc.modo === "cuotas" ? "Participaciones (cuotas)" : "Porcentaje fijo de ganancia"}</b>
+          {soc.modo === "cuotas" && (
+            <span className="block mt-1" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+              Valor de la cuota: ${fmt(libro.nav, 4)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {libro.socios.map((s) => (
+        <div key={s.id} className="rounded-xl bg-white border border-stone-200 p-4">
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-stone-900">{s.nombre}</span>
+            <Badge tone="ok">{fmt(s.participacion, 1)}%</Badge>
+          </div>
+          <div className="grid grid-cols-2 gap-y-1.5 mt-3 text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+            <span className="text-stone-400">Aportado</span><span className="text-right text-stone-800">${fmt(s.aportado)}</span>
+            <span className="text-stone-400">Retirado</span><span className="text-right text-stone-800">${fmt(s.retirado)}</span>
+            {soc.modo === "cuotas" && (<>
+              <span className="text-stone-400">Valor actual</span><span className="text-right text-stone-800">${fmt(s.valor)}</span>
+            </>)}
+            <span className="text-stone-400">{soc.modo === "cuotas" ? "Ganancia total" : "Ganancia disponible"}</span>
+            <span className={`text-right font-bold ${s.ganancia < 0 ? "text-red-600" : "text-emerald-700"}`}>${fmt(s.ganancia)}</span>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => onNuevaOp({ tipo: "entrada_capital", socioId: s.id })}
+              className="flex-1 rounded-lg border border-emerald-700 text-emerald-800 text-[13px] font-semibold py-2">+ Capital</button>
+            <button onClick={() => onNuevaOp({ tipo: "retiro_socio", socioId: s.id })}
+              className="flex-1 rounded-lg border border-stone-300 text-stone-600 text-[13px] font-semibold py-2">Retiro</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Pendientes({ libro, onCompletar, onTogglePagado }) {
+  const pend = libro.ops.filter((o) => o.estatus === "Pendiente");
+  const terceroOps = libro.ops.filter((o) => o.tipo === "venta_efectivo" && o.calc?.tercero > 0 && !o.form.terceroPagado);
+
+  return (
+    <div className="grid gap-4">
+      <div>
+        <h3 className="text-[12px] uppercase tracking-wide font-bold text-stone-400 mb-2">Operaciones pendientes</h3>
+        {pend.length === 0 && <div className="text-[13px] text-stone-400">Nada pendiente. Todo al día. ✓</div>}
+        <div className="grid gap-2">
+          {pend.map((o) => {
+            const d = diasDesde(o.fecha);
+            return (
+              <div key={o.id} className={`rounded-xl border p-3.5 flex items-center justify-between ${d >= 2 ? "bg-red-50 border-red-200" : "bg-white border-stone-200"}`}>
+                <div>
+                  <div className="font-semibold text-[14px] text-stone-900">{o.cliente || TIPOS[o.tipo].short}</div>
+                  <div className="text-[12px] text-stone-500" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{fmtDate(o.fecha)} · {o.calc?.resumen}</div>
+                  {o.calc?.cobro && <div className="text-[12px] font-bold text-amber-700 mt-0.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>Te debe ${fmt(o.calc.cobro.monto)}</div>}
+                  {d >= 2 && <div className="text-[12px] text-red-600 font-semibold mt-0.5">⚠ {d} días sin pagarte</div>}
+                </div>
+                <button onClick={() => onCompletar(o.id)} className="flex items-center gap-1.5 rounded-lg bg-emerald-700 text-white text-[13px] font-bold px-3 py-2 shrink-0">
+                  <CheckCircle2 size={16} /> Me pagó
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-[12px] uppercase tracking-wide font-bold text-stone-400 mb-2">Por pagar a socios externos</h3>
+        {terceroOps.length === 0 && <div className="text-[13px] text-stone-400">No debes comisiones a nadie.</div>}
+        <div className="grid gap-2">
+          {terceroOps.map((o) => (
+            <div key={o.id} className="rounded-xl bg-white border border-amber-200 p-3.5 flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-[14px] text-stone-900">{o.calc.terceroNombre}</div>
+                <div className="text-[12px] text-stone-500">{fmtDate(o.fecha)} · venta de ${fmt(parseFloat(o.form.montoEfectivo) || 0, 0)} efectivo</div>
+              </div>
+              <button onClick={() => onTogglePagado(o.id)} className="rounded-lg bg-amber-500 text-white text-[13px] font-bold px-3 py-2 shrink-0">
+                Pagar ${fmt(o.calc.tercero)}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== App ============================== */
+function App() {
+  const [state, setState] = useState({ sociedades: [], operaciones: [] });
+  const [loaded, setLoaded] = useState(false);
+  const [socId, setSocId] = useState(null);
+  const [tab, setTab] = useState("inicio");
+  const [modalOp, setModalOp] = useState(null);       // null | {prefill}
+  const [modalSoc, setModalSoc] = useState(false);
+  const [selectorAbierto, setSelectorAbierto] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get(STORAGE_KEY);
+        if (r?.value) {
+          const s = JSON.parse(r.value);
+          setState(s);
+          if (s.sociedades[0]) setSocId(s.sociedades[0].id);
+        }
+      } catch (e) { /* sin datos guardados aún */ }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | ok | error
+  const [ultimoGuardado, setUltimoGuardado] = useState(null);
+
+  const guardarTodo = useCallback(async (data) => {
+    setSaveStatus("saving");
+    try {
+      if (!window.storage || typeof window.storage.set !== "function") throw new Error("storage no disponible");
+      const r = await window.storage.set(STORAGE_KEY, JSON.stringify(data));
+      if (!r) throw new Error("el guardado no respondió");
+      setSaveStatus("ok");
+      setUltimoGuardado(new Date());
+    } catch (e) {
+      setSaveStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    guardarTodo(state);
+  }, [state, loaded, guardarTodo]);
+
+  const guardarManual = async () => {
+    await guardarTodo(state);
+    // Si el almacenamiento interno no funciona, garantizamos los datos con el respaldo en archivo
+    setTimeout(() => {
+      setSaveStatus((st) => {
+        if (st === "error") descargarRespaldo();
+        return st;
+      });
+    }, 300);
+  };
+
+  const descargarRespaldo = () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mesa-de-cambio-respaldo-${hoy()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const restaurarRespaldo = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!Array.isArray(data.sociedades) || !Array.isArray(data.operaciones)) throw new Error("formato inválido");
+        if (!confirm(`Restaurar respaldo con ${data.sociedades.length} sociedad(es) y ${data.operaciones.length} operación(es). Esto reemplaza los datos actuales. ¿Continuar?`)) return;
+        setState(data);
+        setSocId(data.sociedades[0]?.id || null);
+      } catch (err) {
+        alert("El archivo no es un respaldo válido de la app.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const soc = state.sociedades.find((s) => s.id === socId) || null;
+  const libro = useMemo(() => (soc ? computeLibro(soc, state.operaciones) : null), [soc, state.operaciones]);
+  const clientes = useMemo(() => [...new Set(state.operaciones.filter((o) => o.cliente).map((o) => o.cliente))].sort(), [state.operaciones]);
+
+  const [completando, setCompletando] = useState(null); // id de la op a completar
+  const [detalle, setDetalle] = useState(null);          // id de la op a detallar
+
+  const addOp = (op) => setState((s) => ({ ...s, operaciones: [...s.operaciones, op] }));
+  const delOp = (id) => setState((s) => ({ ...s, operaciones: s.operaciones.filter((o) => o.id !== id) }));
+  const completarOp = (id, referencia, emisor) => setState((s) => ({
+    ...s,
+    operaciones: s.operaciones.map((o) => o.id === id
+      ? { ...o, estatus: "Completado", form: { ...o.form, referencia: referencia || o.form.referencia || "", emisor: emisor || o.form.emisor || "" } }
+      : o),
+  }));
+  const togglePagado = (id) => setState((s) => ({
+    ...s, operaciones: s.operaciones.map((o) => o.id === id ? { ...o, form: { ...o.form, terceroPagado: !o.form.terceroPagado } } : o),
+  }));
+  const addSociedad = (nueva) => {
+    setState((s) => ({ ...s, sociedades: [...s.sociedades, nueva] }));
+    setSocId(nueva.id);
+  };
+  const delSociedad = () => {
+    if (!soc) return;
+    if (!confirm(`¿Eliminar la sociedad "${soc.nombre}" y todas sus operaciones? Esto no se puede deshacer.`)) return;
+    setState((s) => ({
+      sociedades: s.sociedades.filter((x) => x.id !== soc.id),
+      operaciones: s.operaciones.filter((o) => o.socId !== soc.id),
+    }));
+    setSocId(state.sociedades.find((x) => x.id !== soc.id)?.id || null);
+  };
+
+  const exportar = () => {
+    if (!libro) return;
+    const filas = libro.ops.map((o) => ({
+      Fecha: o.fecha, Tipo: TIPOS[o.tipo].label, Cliente: o.cliente || "",
+      Emisor: o.form.emisor || "", Referencia: o.form.referencia || "",
+      Detalle: o.calc?.resumen || "", Ganancia: o.calc?.ganancia ?? "",
+      Estatus: o.estatus || "", Observaciones: o.obs || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(filas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Operaciones");
+    const res = XLSX.utils.json_to_sheet([
+      { Concepto: "USDT", Valor: libro.usdt },
+      { Concepto: "USD Banco", Valor: libro.banco },
+      { Concepto: "USD Efectivo", Valor: libro.efectivo },
+      { Concepto: "Por Cobrar", Valor: libro.porCobrar },
+      { Concepto: "Patrimonio", Valor: libro.patrimonio },
+      ...libro.socios.map((s) => ({ Concepto: `Ganancia ${s.nombre}`, Valor: s.ganancia })),
+    ]);
+    XLSX.utils.book_append_sheet(wb, res, "Resumen");
+    XLSX.writeFile(wb, `${soc.nombre.replace(/\s+/g, "_")}_${hoy()}.xlsx`);
+  };
+
+  if (!loaded) return <div className="min-h-screen flex items-center justify-center bg-stone-100 text-stone-400">Cargando…</div>;
+
+  return (
+    <div className="min-h-screen bg-[#EEF1EC] text-stone-900" style={{ fontFamily: "'Inter',system-ui,sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        input[type=number]::-webkit-inner-spin-button{display:none}
+      `}</style>
+
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-[#0C2A20] text-white px-4 pb-3 shadow-md" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
+        <div className="max-w-lg mx-auto flex items-center justify-between">
+          <div className="min-w-0">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-emerald-300/70 font-semibold">Mesa de cambio</div>
+            <button onClick={() => setSelectorAbierto((v) => !v)} className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-lg font-bold truncate" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>
+                {soc ? soc.nombre : "Sin sociedades"}
+              </span>
+              <ChevronDown size={16} className={`transition-transform ${selectorAbierto ? "rotate-180" : ""}`} />
+            </button>
+          </div>
+          {soc && (
+            <div className="flex items-center gap-1">
+              <button onClick={guardarManual}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold transition-colors ${
+                  saveStatus === "error" ? "bg-red-500/20 text-red-200" :
+                  saveStatus === "saving" ? "bg-white/10 text-emerald-200/60" :
+                  "bg-white/10 text-emerald-100"}`}>
+                <Save size={15} />
+                {saveStatus === "saving" ? "Guardando…" : saveStatus === "error" ? "⚠ Error" : "Guardar"}
+              </button>
+              <button onClick={delSociedad} className="p-2 rounded-lg text-emerald-200/50 hover:text-red-300" title="Eliminar sociedad">
+                <Settings2 size={18} />
+              </button>
+            </div>
+          )}
+        </div>
+        {saveStatus === "error" && (
+          <div className="max-w-lg mx-auto mt-2 rounded-lg bg-red-500/15 border border-red-400/30 px-3 py-2 text-[12px] text-red-200">
+            ⚠ El almacenamiento interno no está disponible aquí. Al tocar "Guardar" se descarga un archivo de respaldo con todos tus datos — guárdalo en tu teléfono y, la próxima vez que abras la app, cárgalo con "Restaurar" (menú ▾ o pantalla inicial).
+          </div>
+        )}
+        {saveStatus === "ok" && ultimoGuardado && (
+          <div className="max-w-lg mx-auto mt-1 text-[10px] text-emerald-300/50" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+            ✓ Guardado {ultimoGuardado.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit" })}
+          </div>
+        )}
+        {selectorAbierto && (
+          <div className="max-w-lg mx-auto mt-3 grid gap-1.5">
+            {state.sociedades.map((s) => (
+              <button key={s.id} onClick={() => { setSocId(s.id); setSelectorAbierto(false); }}
+                className={`text-left px-3 py-2 rounded-lg text-[14px] ${s.id === socId ? "bg-emerald-700/60 font-bold" : "bg-white/5"}`}>
+                {s.nombre}
+              </button>
+            ))}
+            <button onClick={() => { setModalSoc(true); setSelectorAbierto(false); }}
+              className="text-left px-3 py-2 rounded-lg text-[14px] bg-white/5 text-emerald-300 font-semibold">
+              + Nueva sociedad
+            </button>
+            <div className="grid grid-cols-2 gap-1.5 mt-1">
+              <button onClick={() => { descargarRespaldo(); setSelectorAbierto(false); }}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[13px] bg-white/5 text-emerald-100/80 font-semibold">
+                <FileDown size={14} /> Respaldo
+              </button>
+              <label className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[13px] bg-white/5 text-emerald-100/80 font-semibold cursor-pointer">
+                <FileUp size={14} /> Restaurar
+                <input type="file" accept=".json,application/json" className="hidden" onChange={(e) => { restaurarRespaldo(e); setSelectorAbierto(false); }} />
+              </label>
+            </div>
+          </div>
+        )}
+      </header>
+
+      {/* Contenido */}
+      <main className="max-w-lg mx-auto px-4 py-4 pb-28">
+        {!soc && (
+          <div className="text-center py-16">
+            <Wallet size={40} className="mx-auto text-stone-300" />
+            <h2 className="font-bold text-lg mt-4" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Empieza creando una sociedad</h2>
+            <p className="text-[14px] text-stone-500 mt-1 max-w-xs mx-auto">
+              Cada sociedad es una bolsa separada: tu negocio propio, el de tu papá, el de tu amigo. Cada una con sus saldos, socios y reparto.
+            </p>
+            <button onClick={() => setModalSoc(true)} className="mt-5 rounded-xl bg-emerald-800 text-white font-bold px-6 py-3">
+              Crear mi primera sociedad
+            </button>
+            <div className="mt-3">
+              <label className="inline-flex items-center gap-1.5 text-[14px] text-emerald-800 font-semibold cursor-pointer">
+                <FileUp size={15} /> ¿Ya usabas la app? Restaurar respaldo (.json)
+                <input type="file" accept=".json,application/json" className="hidden" onChange={restaurarRespaldo} />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {soc && libro && (<>
+          {tab === "inicio" && <Inicio soc={soc} libro={libro} ops={state.operaciones} />}
+          {tab === "ops" && <ListaOps libro={libro} onDelete={delOp} onCompletar={setCompletando} onTogglePagado={togglePagado} onExport={exportar} onDetalle={setDetalle} />}
+          {tab === "clientes" && <Clientes libro={libro} />}
+          {tab === "socios" && <Socios soc={soc} libro={libro} onNuevaOp={(p) => setModalOp(p)} />}
+          {tab === "pend" && <Pendientes libro={libro} onCompletar={setCompletando} onTogglePagado={togglePagado} />}
+        </>)}
+      </main>
+
+      {/* FAB */}
+      {soc && (
+        <button onClick={() => setModalOp({})}
+          style={{ bottom: "calc(5rem + env(safe-area-inset-bottom))" }}
+          className="fixed right-4 z-40 w-14 h-14 rounded-full bg-emerald-700 text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform">
+          <Plus size={26} />
+        </button>
+      )}
+
+      {/* Nav inferior */}
+      {soc && (
+        <nav className="fixed bottom-0 inset-x-0 z-40 bg-white border-t border-stone-200" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <div className="max-w-lg mx-auto grid grid-cols-5">
+            {[
+              { k: "inicio", t: "Inicio", I: Wallet },
+              { k: "ops", t: "Operac.", I: ArrowLeftRight },
+              { k: "clientes", t: "Clientes", I: Users },
+              { k: "socios", t: "Socios", I: UserRound },
+              { k: "pend", t: "Pendientes", I: Bell },
+            ].map(({ k, t, I }) => {
+              const activo = tab === k;
+              const nPend = k === "pend" && libro ? libro.ops.filter((o) => o.estatus === "Pendiente").length : 0;
+              return (
+                <button key={k} onClick={() => setTab(k)} className={`relative flex flex-col items-center py-2.5 ${activo ? "text-emerald-800" : "text-stone-400"}`}>
+                  <I size={20} strokeWidth={activo ? 2.4 : 2} />
+                  <span className="text-[10px] font-semibold mt-0.5">{t}</span>
+                  {nPend > 0 && <span className="absolute top-1 right-[22%] w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{nPend}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
+
+      {modalOp && soc && libro && (
+        <NuevaOpModal soc={soc} libro={libro} clientes={clientes} prefill={modalOp} onSave={addOp} onClose={() => setModalOp(null)} />
+      )}
+      {modalSoc && <SociedadModal onSave={addSociedad} onClose={() => setModalSoc(false)} />}
+      {detalle && soc && (() => {
+        const op = state.operaciones.find((o) => o.id === detalle);
+        if (!op) return null;
+        return (
+          <DetalleOpModal
+            op={op} soc={soc}
+            onClose={() => setDetalle(null)}
+            onCompletar={(id) => { setDetalle(null); setCompletando(id); }}
+            onTogglePagado={togglePagado}
+            onDelete={(id) => { delOp(id); setDetalle(null); }}
+          />
+        );
+      })()}
+      {completando && (
+        <CompletarModal
+          op={state.operaciones.find((o) => o.id === completando)}
+          onConfirm={(ref, emisor) => { completarOp(completando, ref, emisor); setCompletando(null); }}
+          onClose={() => setCompletando(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+</body>
+</html>
