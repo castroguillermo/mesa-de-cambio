@@ -6,7 +6,7 @@
 //  3) Se actualice sola cuando subas una versión nueva
 // ============================================================
 
-const VERSION = "v4";
+const VERSION = "v5";
 const CACHE = `mesa-cambio-${VERSION}`;
 
 const APP_SHELL = [
