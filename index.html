@@ -1274,21 +1274,31 @@ function Socios({ soc, libro, onNuevaOp }) {
       {libro.socios.map((s) => {
         const valorSocio = soc.modo === "cuotas" ? (s.valor || 0) : Math.max((s.aportado || 0) + (s.gananciaAcum || 0), 0);
         const share = libro.patrimonio > 0 ? valorSocio / libro.patrimonio : 0;
+        const movs = libro.ops
+          .filter((o) => ["entrada_capital", "retiro_socio", "capitalizar"].includes(o.tipo) && o.form?.socioId === s.id)
+          .slice(-6).reverse();
         return (
           <div key={s.id} className="rounded-xl bg-white border border-stone-200 p-4">
             <div className="flex items-center justify-between">
               <span className="font-bold text-stone-900">{s.nombre}</span>
               <Badge tone="ok">{fmt(s.participacion, 2)}%</Badge>
             </div>
+
+            {/* Balance del socio */}
             <div className="grid grid-cols-2 gap-y-1.5 mt-3 text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
-              <span className="text-stone-400">Aportado</span><span className="text-right text-stone-800">${fmt(s.aportado)}</span>
-              <span className="text-stone-400">Retirado</span><span className="text-right text-stone-800">${fmt(s.retirado)}</span>
+              <span className="text-stone-400">Capital aportado</span><span className="text-right text-stone-800">${fmt(s.aportado)}</span>
+              <span className="text-stone-400">Retirado (en su poder)</span><span className="text-right text-stone-800">${fmt(s.retirado)}</span>
               {soc.modo === "cuotas" && (<>
-                <span className="text-stone-400">Valor actual</span><span className="text-right text-stone-800">${fmt(s.valor)}</span>
+                <span className="text-stone-400">Valor hoy en el pote</span><span className="text-right text-stone-800">${fmt(s.valor)}</span>
               </>)}
-              <span className="text-stone-400">{soc.modo === "cuotas" ? "Ganancia total" : "Ganancia disponible"}</span>
+              <span className="text-stone-500 font-bold">{soc.modo === "cuotas" ? "Ganancia histórica" : "Ganancia disponible"}</span>
               <span className={`text-right font-bold ${s.ganancia < 0 ? "text-red-600" : "text-emerald-700"}`}>${fmt(s.ganancia)}</span>
             </div>
+            {soc.modo === "cuotas" && (
+              <div className="text-[10px] text-stone-400 mt-1" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                Ganancia = valor en el pote + retirado − aportado
+              </div>
+            )}
 
             <div className="mt-3 rounded-lg bg-stone-50 border border-stone-100 p-3">
               <div className="text-[10px] uppercase tracking-wide text-stone-400 font-semibold mb-1.5">Le corresponde del pote hoy ({fmt(share * 100, 2)}%)</div>
@@ -1300,8 +1310,23 @@ function Socios({ soc, libro, onNuevaOp }) {
                   <span className="text-stone-400">Por cobrar</span><span className="text-right text-stone-700">${fmt(share * libro.porCobrar)}</span>
                 </>)}
               </div>
-              <div className="text-[10px] text-stone-400 mt-1.5">Proporcional: el pote es compartido, cada quien es dueño de un % del total, no de monedas específicas.</div>
+              <div className="text-[10px] text-stone-400 mt-1.5">La ganancia es el valor de su % del pote, no vive en una moneda específica: las monedas son del pote y rotan con el negocio.</div>
             </div>
+
+            {/* Movimientos del socio */}
+            {movs.length > 0 && (
+              <div className="mt-3">
+                <div className="text-[10px] uppercase tracking-wide text-stone-400 font-semibold mb-1">Últimos movimientos</div>
+                {movs.map((o) => (
+                  <div key={o.id} className="flex items-center justify-between py-1 border-t border-stone-100 text-[12px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                    <span className="text-stone-400">{fmtDate(o.fecha)} · {TIPOS[o.tipo].short}{o.form?.cuenta && o.tipo !== "capitalizar" ? ` (${o.form.cuenta})` : ""}</span>
+                    <span className={o.tipo === "retiro_socio" ? "text-red-600 font-semibold" : o.tipo === "entrada_capital" ? "text-emerald-700 font-semibold" : "text-stone-600 font-semibold"}>
+                      {o.tipo === "retiro_socio" ? "−" : o.tipo === "entrada_capital" ? "+" : "↻ "}{fmtMoneda(o.calc?.monto || 0, o.tipo === "capitalizar" ? "banco" : o.form?.cuenta)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="flex gap-2 mt-3">
               <button onClick={() => onNuevaOp({ tipo: "entrada_capital", socioId: s.id })}
