@@ -622,6 +622,11 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
                     deGanancia = Math.min(monto, gDisp);
                     deCapital = Math.max(monto - deGanancia, 0);
                   }
+                } else if (!esRetiro && s && esCuotas && monto > 0) {
+                  const nav = libro.nav > 0 ? libro.nav : 1;
+                  const cn = monto / nav;
+                  const tot = libro.cuotasTot + cn;
+                  partNueva = tot > 0 ? ((s.cuotas + cn) / tot) * 100 : 100;
                 }
 
                 return (<>
@@ -679,8 +684,14 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
                         )}
                       </>)}
                       {esCuotas && monto <= maxRetiro + 0.005 && partNueva !== null && (
-                        <div className="text-stone-600">Su participación pasa de <b>{fmt(s.participacion, 1)}%</b> a <b className="text-amber-700">{fmt(partNueva, 1)}%</b> y los siguientes repartos se ajustan solos.</div>
+                        <div className="text-stone-600">Su participación pasa de <b>{fmt(s.participacion, 2)}%</b> a <b className="text-amber-700">{fmt(partNueva, 2)}%</b> y los siguientes repartos se ajustan solos.</div>
                       )}
+                    </div>
+                  )}
+
+                  {!esRetiro && esCuotas && monto > 0 && s && partNueva !== null && (
+                    <div className="rounded-xl border border-stone-200 bg-white p-3.5 mb-3 text-[13px] text-stone-600">
+                      Su participación pasa de <b>{fmt(s.participacion, 2)}%</b> a <b className="text-emerald-700">{fmt(partNueva, 2)}%</b> — compra {fmt(monto / (libro.nav > 0 ? libro.nav : 1), 2)} cuotas al valor actual de ${fmt(libro.nav, 4)}.
                     </div>
                   )}
                 </>);
@@ -1260,29 +1271,47 @@ function Socios({ soc, libro, onNuevaOp }) {
         </div>
       </div>
 
-      {libro.socios.map((s) => (
-        <div key={s.id} className="rounded-xl bg-white border border-stone-200 p-4">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-stone-900">{s.nombre}</span>
-            <Badge tone="ok">{fmt(s.participacion, 1)}%</Badge>
+      {libro.socios.map((s) => {
+        const valorSocio = soc.modo === "cuotas" ? (s.valor || 0) : Math.max((s.aportado || 0) + (s.gananciaAcum || 0), 0);
+        const share = libro.patrimonio > 0 ? valorSocio / libro.patrimonio : 0;
+        return (
+          <div key={s.id} className="rounded-xl bg-white border border-stone-200 p-4">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-stone-900">{s.nombre}</span>
+              <Badge tone="ok">{fmt(s.participacion, 2)}%</Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-y-1.5 mt-3 text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+              <span className="text-stone-400">Aportado</span><span className="text-right text-stone-800">${fmt(s.aportado)}</span>
+              <span className="text-stone-400">Retirado</span><span className="text-right text-stone-800">${fmt(s.retirado)}</span>
+              {soc.modo === "cuotas" && (<>
+                <span className="text-stone-400">Valor actual</span><span className="text-right text-stone-800">${fmt(s.valor)}</span>
+              </>)}
+              <span className="text-stone-400">{soc.modo === "cuotas" ? "Ganancia total" : "Ganancia disponible"}</span>
+              <span className={`text-right font-bold ${s.ganancia < 0 ? "text-red-600" : "text-emerald-700"}`}>${fmt(s.ganancia)}</span>
+            </div>
+
+            <div className="mt-3 rounded-lg bg-stone-50 border border-stone-100 p-3">
+              <div className="text-[10px] uppercase tracking-wide text-stone-400 font-semibold mb-1.5">Le corresponde del pote hoy ({fmt(share * 100, 2)}%)</div>
+              <div className="grid grid-cols-2 gap-y-1 text-[12px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                <span className="text-stone-400">En USDT</span><span className="text-right text-stone-700">{fmt(share * libro.usdt, 4)} USDT</span>
+                <span className="text-stone-400">En banco</span><span className="text-right text-stone-700">${fmt(share * libro.banco)}</span>
+                <span className="text-stone-400">En efectivo</span><span className="text-right text-stone-700">${fmt(share * libro.efectivo)}</span>
+                {libro.porCobrar > 0.005 && (<>
+                  <span className="text-stone-400">Por cobrar</span><span className="text-right text-stone-700">${fmt(share * libro.porCobrar)}</span>
+                </>)}
+              </div>
+              <div className="text-[10px] text-stone-400 mt-1.5">Proporcional: el pote es compartido, cada quien es dueño de un % del total, no de monedas específicas.</div>
+            </div>
+
+            <div className="flex gap-2 mt-3">
+              <button onClick={() => onNuevaOp({ tipo: "entrada_capital", socioId: s.id })}
+                className="flex-1 rounded-lg border border-emerald-700 text-emerald-800 text-[13px] font-semibold py-2">+ Capital</button>
+              <button onClick={() => onNuevaOp({ tipo: "retiro_socio", socioId: s.id })}
+                className="flex-1 rounded-lg border border-stone-300 text-stone-600 text-[13px] font-semibold py-2">Retiro</button>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-y-1.5 mt-3 text-[13px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
-            <span className="text-stone-400">Aportado</span><span className="text-right text-stone-800">${fmt(s.aportado)}</span>
-            <span className="text-stone-400">Retirado</span><span className="text-right text-stone-800">${fmt(s.retirado)}</span>
-            {soc.modo === "cuotas" && (<>
-              <span className="text-stone-400">Valor actual</span><span className="text-right text-stone-800">${fmt(s.valor)}</span>
-            </>)}
-            <span className="text-stone-400">{soc.modo === "cuotas" ? "Ganancia total" : "Ganancia disponible"}</span>
-            <span className={`text-right font-bold ${s.ganancia < 0 ? "text-red-600" : "text-emerald-700"}`}>${fmt(s.ganancia)}</span>
-          </div>
-          <div className="flex gap-2 mt-3">
-            <button onClick={() => onNuevaOp({ tipo: "entrada_capital", socioId: s.id })}
-              className="flex-1 rounded-lg border border-emerald-700 text-emerald-800 text-[13px] font-semibold py-2">+ Capital</button>
-            <button onClick={() => onNuevaOp({ tipo: "retiro_socio", socioId: s.id })}
-              className="flex-1 rounded-lg border border-stone-300 text-stone-600 text-[13px] font-semibold py-2">Retiro</button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
