@@ -184,7 +184,8 @@ function calcularOp(tipo, f) {
     case "compra_usd": {
       const usd = m("montoUSD"), tc = m("tasaCliente"), tb = m("tasaBinance");
       const bs = usd * tc;
-      const usdtVend = tb > 0 ? bs / tb + FEE_P2P : 0;
+      const feeP2P = f.sinFeeP2P ? 0 : FEE_P2P;
+      const usdtVend = tb > 0 ? bs / tb + feeP2P : 0;
       const feeIn = f.metodo === "Wire" ? FEE_WIRE_IN : 0;
       const ganancia = usd - usdtVend - feeIn;
       return {
@@ -535,6 +536,9 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
                 <Field label="Método de pago del cliente"><Seg opciones={METODOS.map((m) => ({ v: m, t: m }))} value={form.metodo} onChange={(v) => set("metodo", v)} /></Field>
                 <Field label="Tasa acordada con el cliente (Bs/USD)"><Num value={form.tasaCliente || ""} onChange={(e) => set("tasaCliente", e.target.value)} /></Field>
                 <Field label="Tasa de venta en Binance (Bs/USDT)"><Num value={form.tasaBinance || ""} onChange={(e) => set("tasaBinance", e.target.value)} /></Field>
+                <Field label="Comisión P2P (0.06 USDT)" hint="Desactívala si esta operación comparte una sola venta P2P con otras (cóbrala en una sola del lote)">
+                  <Seg opciones={[{ v: false, t: "Cobrar aquí" }, { v: true, t: "No cobrar (lote compartido)" }]} value={!!form.sinFeeP2P} onChange={(v) => set("sinFeeP2P", v)} />
+                </Field>
               </>)}
 
               {tipo === "venta_usdt" && (<>
@@ -808,7 +812,7 @@ function DetalleOpModal({ op, soc, onClose, onCompletar, onTogglePagado, onDelet
     add("Tasa cliente", `${fmt(parseFloat(f.tasaCliente) || 0)} Bs/USD`);
     add("Tasa Binance", `${fmt(parseFloat(f.tasaBinance) || 0)} Bs/USDT`);
     add("Bs pagados", `Bs ${fmt(c.bs, 2)}`);
-    add("USDT vendidos", `${fmt(c.usdtVend)} (incluye 0.06 P2P)`);
+    add("USDT vendidos", `${fmt(c.usdtVend)}${f.sinFeeP2P ? " (sin fee P2P: lote compartido)" : " (incluye 0.06 P2P)"}`);
     if (f.metodo === "Wire") add("Comisión wire recibido", `$${FEE_WIRE_IN}`);
   }
   if (op.tipo === "venta_usdt") {
