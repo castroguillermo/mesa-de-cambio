@@ -1313,8 +1313,10 @@ function Socios({ soc, libro, onNuevaOp }) {
                 {libro.porCobrar > 0.005 && (<>
                   <span className="text-stone-400">Por cobrar</span><span className="text-right text-stone-700">${fmt(share * libro.porCobrar)}</span>
                 </>)}
+                <span className="text-stone-500 font-bold border-t border-stone-200 pt-1">Total</span>
+                <span className="text-right font-bold text-stone-800 border-t border-stone-200 pt-1">${fmt(valorSocio)}</span>
               </div>
-              <div className="text-[10px] text-stone-400 mt-1.5">La ganancia es el valor de su % del pote, no vive en una moneda específica: las monedas son del pote y rotan con el negocio.</div>
+              <div className="text-[10px] text-stone-400 mt-1.5">Es su mismo valor de arriba, repartido según dónde está el dinero del pote hoy. A mitad de ciclo se ve dividido; al completar la recompra de USDT se consolida.</div>
             </div>
 
             {/* Movimientos del socio */}
