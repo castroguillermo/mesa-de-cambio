@@ -1,12 +1,8 @@
 // ============================================================
-// Service Worker — Mesa de Cambio  (v2)
-// Trabaja en segundo plano para que la app:
-//  1) Cargue al instante desde la copia local
-//  2) Funcione sin internet
-//  3) Se actualice sola cuando subas una versión nueva
+// Service Worker — Mesa de Cambio  (v11)
 // ============================================================
 
-const VERSION = "v10";
+const VERSION = "v12";
 const CACHE = `mesa-cambio-${VERSION}`;
 
 const APP_SHELL = [

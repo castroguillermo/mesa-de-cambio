@@ -187,12 +187,17 @@ function calcularOp(tipo, f) {
       const feeP2P = f.sinFeeP2P ? 0 : FEE_P2P;
       const usdtVend = tb > 0 ? bs / tb + feeP2P : 0;
       const feeIn = f.metodo === "Wire" ? FEE_WIRE_IN : 0;
-      const ganancia = usd - usdtVend - feeIn;
+      const feeProv = f.metodo === "Proveedor" ? usd * (m("pctProveedor") / 100) : 0;
+      const ganancia = usd - usdtVend - feeIn - feeProv;
       return {
-        resumen: `$${fmt(usd)} → Bs ${fmt(bs, 0)} · vendes ${fmt(usdtVend)} USDT`,
+        resumen: `$${fmt(usd)} → Bs ${fmt(bs, 0)} · vendes ${fmt(usdtVend)} USDT${f.metodo === "Proveedor" ? " · repone proveedor" : ""}`,
         bs, usdtVend, ganancia, roi: usdtVend > 0 ? ganancia / usdtVend : 0,
+        ...(feeProv > 0 ? { tercero: feeProv, terceroNombre: f.proveedor || "Proveedor" } : {}),
         delta: { usdt: -usdtVend, banco: 0, efectivo: 0 },
-        cobro: { cuenta: f.metodo === "Efectivo" ? "efectivo" : "banco", monto: usd - feeIn },
+        cobro: {
+          cuenta: f.metodo === "Efectivo" ? "efectivo" : f.metodo === "Proveedor" ? "usdt" : "banco",
+          monto: usd - feeIn,
+        },
       };
     }
     case "venta_usdt": {
@@ -372,7 +377,7 @@ function computeLibro(soc, opsAll) {
       }
     }
 
-    if (op.tipo === "venta_efectivo" && c.tercero > 0) {
+    if (c.tercero > 0) {
       if (op.form.terceroPagado) {
         banco -= c.tercero;
       } else {
@@ -533,7 +538,25 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
 
               {tipo === "compra_usd" && (<>
                 <Field label="Monto USD que recibes"><Num value={form.montoUSD || ""} onChange={(e) => set("montoUSD", e.target.value)} /></Field>
-                <Field label="Método de pago del cliente"><Seg opciones={METODOS.map((m) => ({ v: m, t: m }))} value={form.metodo} onChange={(v) => set("metodo", v)} /></Field>
+                <Field label="Método de pago del cliente">
+                  <Seg opciones={[...METODOS.map((m) => ({ v: m, t: m })), { v: "Proveedor", t: "Directo a proveedor" }]} value={form.metodo} onChange={(v) => set("metodo", v)} />
+                  {form.metodo === "Proveedor" && (
+                    <p className="text-xs text-stone-500 mt-2">El cliente le paga los $ a tu proveedor y él te repone en USDT 1:1 — entra a tu saldo USDT, no al banco. El % que te cobre el proveedor regístralo aparte como un Ajuste (gasto) cuando se lo pagues.</p>
+                  )}
+                </Field>
+                {form.metodo === "Proveedor" && (<>
+                  <Field label="Proveedor de USDT">
+                    <AutoInput value={form.proveedor} onChange={(v) => set("proveedor", v)} opciones={proveedores} placeholder="Nombre del proveedor" />
+                  </Field>
+                  <Field label="% que te cobra el proveedor" hint="Déjalo en 0 (o vacío) si no cobra. Se descuenta de la ganancia y queda como por pagar hasta que se lo pagues.">
+                    <Num value={form.pctProveedor || ""} onChange={(e) => set("pctProveedor", e.target.value)} placeholder="0" />
+                  </Field>
+                  {(parseFloat(form.pctProveedor) || 0) > 0 && (
+                    <Field label="¿Ya le pagaste su fee?">
+                      <Seg opciones={[{ v: false, t: "No, queda por pagar" }, { v: true, t: "Sí, ya salió del banco" }]} value={!!form.terceroPagado} onChange={(v) => set("terceroPagado", v)} />
+                    </Field>
+                  )}
+                </>)}
                 <Field label="Tasa acordada con el cliente (Bs/USD)"><Num value={form.tasaCliente || ""} onChange={(e) => set("tasaCliente", e.target.value)} /></Field>
                 <Field label="Tasa de venta en Binance (Bs/USDT)"><Num value={form.tasaBinance || ""} onChange={(e) => set("tasaBinance", e.target.value)} /></Field>
                 <Field label="Comisión P2P (0.06 USDT)" hint="Desactívala si esta operación comparte una sola venta P2P con otras (cóbrala en una sola del lote)">
@@ -808,7 +831,9 @@ function DetalleOpModal({ op, soc, onClose, onCompletar, onTogglePagado, onDelet
   if (["compra_usd", "venta_usdt", "retiro_efectivo", "recompra_usdt"].includes(op.tipo)) add("Método", f.metodo);
 
   if (op.tipo === "compra_usd") {
-    add("USD recibidos", `$${fmt(parseFloat(f.montoUSD) || 0)}`);
+    if (f.metodo === "Proveedor") add("Proveedor", f.proveedor);
+    if (f.metodo === "Proveedor" && c.tercero > 0) add("Fee del proveedor", `${f.pctProveedor}% = $${fmt(c.tercero)} · ${f.terceroPagado ? "pagado ✓" : "por pagar"}`);
+    add("USD recibidos", `$${fmt(parseFloat(f.montoUSD) || 0)}${f.metodo === "Proveedor" ? " (repuestos en USDT por el proveedor)" : ""}`);
     add("Tasa cliente", `${fmt(parseFloat(f.tasaCliente) || 0)} Bs/USD`);
     add("Tasa Binance", `${fmt(parseFloat(f.tasaBinance) || 0)} Bs/USDT`);
     add("Bs pagados", `Bs ${fmt(c.bs, 2)}`);
@@ -893,7 +918,7 @@ function DetalleOpModal({ op, soc, onClose, onCompletar, onTogglePagado, onDelet
                   <CheckCircle2 size={16} /> Registrar pago recibido
                 </button>
               )}
-              {op.tipo === "venta_efectivo" && c.tercero > 0 && (
+              {c.tercero > 0 && (
                 <button onClick={() => onTogglePagado(op.id)}
                   className={`w-full rounded-xl font-bold py-2.5 ${op.form.terceroPagado ? "border border-stone-300 text-stone-500" : "bg-amber-500 text-white"}`}>
                   {op.form.terceroPagado ? `Desmarcar pago a ${c.terceroNombre}` : `Marcar pagado $${fmt(c.tercero)} a ${c.terceroNombre}`}
@@ -1193,7 +1218,7 @@ function ListaOps({ libro, onDelete, onCompletar, onTogglePagado, onExport, onDe
                   </div>
                 )}
                 {o.obs && <div className="text-[12px] text-stone-400 italic mt-0.5">{o.obs}</div>}
-                {o.tipo === "venta_efectivo" && o.calc?.tercero > 0 && (
+                {o.calc?.tercero > 0 && (
                   <button onClick={(e) => { e.stopPropagation(); onTogglePagado(o.id); }} className="mt-1.5">
                     <Badge tone={o.form.terceroPagado ? "ok" : "warn"}>
                       {o.form.terceroPagado ? `✓ ${o.calc.terceroNombre} pagado` : `Pagar $${fmt(o.calc.tercero)} a ${o.calc.terceroNombre}`}
@@ -1349,7 +1374,7 @@ function Socios({ soc, libro, onNuevaOp }) {
 
 function Pendientes({ libro, onCompletar, onTogglePagado }) {
   const pend = libro.ops.filter((o) => o.estatus === "Pendiente");
-  const terceroOps = libro.ops.filter((o) => o.tipo === "venta_efectivo" && o.calc?.tercero > 0 && !o.form.terceroPagado);
+  const terceroOps = libro.ops.filter((o) => o.calc?.tercero > 0 && !o.form.terceroPagado);
 
   return (
     <div className="grid gap-4">
@@ -1384,7 +1409,7 @@ function Pendientes({ libro, onCompletar, onTogglePagado }) {
             <div key={o.id} className="rounded-xl bg-white border border-amber-200 p-3.5 flex items-center justify-between">
               <div>
                 <div className="font-semibold text-[14px] text-stone-900">{o.calc.terceroNombre}</div>
-                <div className="text-[12px] text-stone-500">{fmtDate(o.fecha)} · venta de ${fmt(parseFloat(o.form.montoEfectivo) || 0, 0)} efectivo</div>
+                <div className="text-[12px] text-stone-500">{fmtDate(o.fecha)} · {o.calc?.resumen}</div>
               </div>
               <button onClick={() => onTogglePagado(o.id)} className="rounded-lg bg-amber-500 text-white text-[13px] font-bold px-3 py-2 shrink-0">
                 Pagar ${fmt(o.calc.tercero)}
