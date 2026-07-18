@@ -156,6 +156,8 @@ const TIPOS = {
   venta_usdt:      { label: "Venta de USDT por USD", short: "Venta USDT", desc: "Vendes USDT y recibes USD (Zelle, BofA, Wire o efectivo) cobrando un %." },
   venta_efectivo:  { label: "Venta de efectivo", short: "Venta efectivo", desc: "Entregas efectivo y te depositan el monto más una comisión, compartida con un tercero." },
   intermediacion:  { label: "Intermediación de USDT", short: "Intermediación", desc: "Un tercero paga USD directo a tu proveedor; el proveedor te pasa USDT, tú le entregas su parte al tercero y la diferencia queda tuya en USDT." },
+  lote_proveedor:  { label: "Lote de proveedor (consignación)", short: "Lote prov.", desc: "Recibes USDT en consignación: le deberás ese monto en $ más su %. Abre la cuenta corriente con el proveedor." },
+  liquidacion_lote:{ label: "Liquidación con proveedor", short: "Liquidación", desc: "Cierras cuentas: registras lo que el proveedor te remite del saldo a tu favor." },
   retiro_efectivo: { label: "Banco → Efectivo", short: "Banco→Efectivo", desc: "Conviertes saldo del banco en efectivo físico (1:1)." },
   recompra_usdt:   { label: "Recompra de USDT", short: "Recompra USDT", desc: "Usas USD del banco para comprar USDT y reiniciar el ciclo." },
   entrada_capital: { label: "Entrada de capital", short: "Capital +", desc: "Un socio inyecta capital a la sociedad." },
@@ -226,15 +228,38 @@ function calcularOp(tipo, f) {
       };
     }
     case "intermediacion": {
-      const monto = m("montoUSD"), pct = m("pct");
+      const monto = m("montoUSD"), pct = m("pct"), pctAmigo = m("pctAmigo");
       const usdtCliente = f.modoComision === "dividir" ? (pct > -100 ? monto / (1 + pct / 100) : 0) : monto * (1 - pct / 100);
-      const ganancia = monto - usdtCliente;
+      const amigoCut = monto * pctAmigo / 100;
+      const ganancia = monto - usdtCliente - amigoCut;
+      const amigoExtra = amigoCut > 0 && f.amigoPago !== "usdt" ? { tercero: amigoCut, terceroNombre: f.amigoNombre || "Amigo" } : {};
       return {
-        resumen: `$${fmt(monto)} vía ${f.proveedor || "proveedor"} → entregas ${fmt(usdtCliente, 4)} USDT`,
+        resumen: `$${fmt(monto)} vía ${f.proveedor || "proveedor"} → entregas ${fmt(usdtCliente, 4)} USDT${amigoCut > 0 ? ` · amigo $${fmt(amigoCut)}` : ""}`,
         ganancia, roi: usdtCliente > 0 ? ganancia / usdtCliente : 0,
-        usdtCliente, usdtProveedor: monto,
-        delta: { usdt: 0, banco: 0, efectivo: 0 },
-        cobro: { cuenta: "usdt", monto: ganancia },
+        usdtCliente, montoCliente: monto, amigoCut,
+        ...amigoExtra,
+        delta: { usdt: -usdtCliente - (amigoCut > 0 && f.amigoPago === "usdt" ? amigoCut : 0), banco: 0, efectivo: 0 },
+        provFlujo: { cobro: monto },
+      };
+    }
+    case "lote_proveedor": {
+      const u = m("usdtRecibidos"), pct = m("pctProveedor");
+      const fee = u * pct / 100;
+      const deuda = u + fee;
+      return {
+        resumen: `Lote ${fmt(u, 4)} USDT de ${f.proveedor || "proveedor"} · le deberás $${fmt(deuda)}`,
+        ganancia: -fee, fee, deuda, usdtLote: u,
+        delta: { usdt: u, banco: 0, efectivo: 0 },
+      };
+    }
+    case "liquidacion_lote": {
+      const monto = m("monto");
+      const d = { usdt: 0, banco: 0, efectivo: 0 };
+      d[f.cuenta || "usdt"] = monto;
+      return {
+        resumen: `Liquidación con ${f.proveedor || "proveedor"}: recibes ${fmtMoneda(monto, f.cuenta || "usdt")}`,
+        ganancia: 0, monto,
+        delta: d,
       };
     }
     case "retiro_efectivo": {
@@ -303,8 +328,11 @@ function computeLibro(soc, opsAll) {
   let porCobrar = 0;
   const alertas = [];
   const terceros = {};
+  const provs = {};
+  const P = (n) => (provs[n] = provs[n] || { nombre: n, lote: 0, deuda: 0, cobrado: 0, remesas: 0 });
+  const saldoProvs = () => Object.values(provs).reduce((a, p) => a + p.cobrado - p.deuda - p.remesas, 0);
 
-  const patrimonio = () => usdt + banco + efectivo + porCobrar;
+  const patrimonio = () => usdt + banco + efectivo + porCobrar + saldoProvs();
   const cuotasTot = () => socios.reduce((a, s) => a + s.cuotas, 0);
   const nav = () => (cuotasTot() > 0 ? patrimonio() / cuotasTot() : 1);
 
@@ -365,7 +393,31 @@ function computeLibro(soc, opsAll) {
       continue;
     }
 
+    if (op.tipo === "lote_proveedor") {
+      const p = P((op.form.proveedor || "Proveedor").trim());
+      p.lote += c.usdtLote || 0;
+      p.deuda += c.deuda || 0;
+      usdt += d.usdt; banco += d.banco; efectivo += d.efectivo;
+      if (c.ganancia) distribuir(c.ganancia);
+      continue;
+    }
+
+    if (op.tipo === "liquidacion_lote") {
+      const p = P((op.form.proveedor || "Proveedor").trim());
+      p.remesas += c.monto || 0;
+      usdt += d.usdt; banco += d.banco; efectivo += d.efectivo;
+      continue;
+    }
+
     usdt += d.usdt; banco += d.banco; efectivo += d.efectivo;
+
+    if (c.provFlujo && c.provFlujo.cobro) {
+      if (op.estatus === "Completado") {
+        P((op.form.proveedor || "Proveedor").trim()).cobrado += c.provFlujo.cobro;
+      } else {
+        porCobrar += c.provFlujo.cobro;
+      }
+    }
 
     if (c.cobro) {
       if (op.estatus === "Completado") {
@@ -399,6 +451,7 @@ function computeLibro(soc, opsAll) {
 
   return {
     usdt, banco, efectivo, porCobrar, patrimonio: patrimonio(), gananciaTotal,
+    proveedores: Object.values(provs).map((p) => ({ ...p, saldo: p.cobrado - p.deuda - p.remesas })),
     socios: sociosOut, nav: v, cuotasTot: cuotasTot(), alertas, terceros, ops,
   };
 }
@@ -587,10 +640,11 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
 
               {tipo === "intermediacion" && (() => {
                 const monto = parseFloat(form.montoUSD) || 0, pct = parseFloat(form.pct) || 0;
+                const amigoC = monto * (parseFloat(form.pctAmigo) || 0) / 100;
                 const restar = monto * (1 - pct / 100);
                 const dividir = pct > -100 ? monto / (1 + pct / 100) : 0;
                 return (<>
-                  <Field label="Proveedor de USDT" hint="Quien recibe los $ del tercero y te pasa los USDT">
+                  <Field label="Proveedor de USDT" hint="El $ del cliente entra a la cuenta del proveedor y suma a lo que él te debe">
                     <AutoInput value={form.proveedor} onChange={(v) => set("proveedor", v)} opciones={proveedores} placeholder="Nombre del proveedor" />
                   </Field>
                   <Field label="USD que el cliente pagó al proveedor"><Num value={form.montoUSD || ""} onChange={(e) => set("montoUSD", e.target.value)} /></Field>
@@ -599,10 +653,64 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
                     <Seg opciones={[{ v: "restar", t: "Restar % (−5%)" }, { v: "dividir", t: "Dividir ÷(1+%)" }]} value={form.modoComision || "restar"} onChange={(v) => set("modoComision", v)} />
                     {monto > 0 && pct > 0 && (
                       <div className="mt-2 rounded-lg bg-white border border-stone-200 p-2.5 text-[12px] text-stone-600 grid gap-0.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
-                        <span>Restar:  entregas {fmt(restar, 4)} · ganas {fmt(monto - restar, 4)} USDT</span>
-                        <span>Dividir: entregas {fmt(dividir, 4)} · ganas {fmt(monto - dividir, 4)} USDT</span>
+                        <span>Restar:  entregas {fmt(restar, 4)} · ganas {fmt(monto - restar - amigoC, 4)} USDT</span>
+                        <span>Dividir: entregas {fmt(dividir, 4)} · ganas {fmt(monto - dividir - amigoC, 4)} USDT</span>
                       </div>
                     )}
+                  </Field>
+                  <Field label="% de un amigo/intermediario (opcional)" hint="Si otro te trajo el cliente y comparte comisión. Se calcula sobre el monto del cliente.">
+                    <Num value={form.pctAmigo || ""} onChange={(e) => set("pctAmigo", e.target.value)} placeholder="0 si vas solo" />
+                  </Field>
+                  {(parseFloat(form.pctAmigo) || 0) > 0 && (<>
+                    <Field label="Nombre del amigo">
+                      <AutoInput value={form.amigoNombre} onChange={(v) => set("amigoNombre", v)} opciones={terceros} placeholder="Ej: Andrés" />
+                    </Field>
+                    <Field label={`¿Cómo le pagas su parte ($${fmt(amigoC)})?`}>
+                      <Seg opciones={[{ v: "usdt", t: "Ya pagada en USDT" }, { v: "banco", t: "Ya pagada del banco" }, { v: "pendiente", t: "Pendiente" }]}
+                        value={form.amigoPago || "pendiente"}
+                        onChange={(v) => setForm((fr) => ({ ...fr, amigoPago: v, terceroPagado: v === "banco" }))} />
+                    </Field>
+                  </>)}
+                </>);
+              })()}
+
+              {tipo === "lote_proveedor" && (() => {
+                const u = parseFloat(form.usdtRecibidos) || 0, pp = parseFloat(form.pctProveedor) || 0;
+                return (<>
+                  <Field label="Proveedor">
+                    <AutoInput value={form.proveedor} onChange={(v) => set("proveedor", v)} opciones={proveedores} placeholder="Nombre del proveedor" />
+                  </Field>
+                  <Field label="USDT que te entrega en consignación"><Num value={form.usdtRecibidos || ""} onChange={(e) => set("usdtRecibidos", e.target.value)} /></Field>
+                  <Field label="% que él cobra" hint="Su fee se registra de una vez como costo del negocio">
+                    <Num value={form.pctProveedor || ""} onChange={(e) => set("pctProveedor", e.target.value)} placeholder="Ej: 1" />
+                  </Field>
+                  {u > 0 && (
+                    <div className="rounded-xl border border-stone-200 bg-white p-3.5 mb-3 text-[13px] text-stone-600" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                      Entran {fmt(u, 4)} USDT · le deberás ${fmt(u * (1 + pp / 100))} (sus {fmt(u, 0)} + ${fmt(u * pp / 100)} de fee)
+                    </div>
+                  )}
+                </>);
+              })()}
+
+              {tipo === "liquidacion_lote" && (() => {
+                const p = (libro?.proveedores || []).find((x) => x.nombre === (form.proveedor || "").trim());
+                return (<>
+                  <Field label="Proveedor">
+                    <AutoInput value={form.proveedor} onChange={(v) => set("proveedor", v)} opciones={proveedores} placeholder="Nombre del proveedor" />
+                  </Field>
+                  {p && (
+                    <div className="rounded-xl border border-stone-200 bg-white p-3.5 mb-3 grid grid-cols-2 gap-y-1 text-[12px]" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                      <span className="text-stone-400">Lote entregado</span><span className="text-right">{fmt(p.lote, 4)} USDT</span>
+                      <span className="text-stone-400">Cobrado en su cuenta</span><span className="text-right">${fmt(p.cobrado)}</span>
+                      <span className="text-stone-400">Deuda del lote</span><span className="text-right">${fmt(p.deuda)}</span>
+                      <span className="text-stone-400">Ya remesado</span><span className="text-right">${fmt(p.remesas)}</span>
+                      <span className="text-stone-500 font-bold border-t border-stone-200 pt-1">{p.saldo >= 0 ? "Te debe" : "Le debes"}</span>
+                      <span className={`text-right font-bold border-t border-stone-200 pt-1 ${p.saldo >= 0 ? "text-emerald-700" : "text-red-600"}`}>${fmt(Math.abs(p.saldo))}</span>
+                    </div>
+                  )}
+                  <Field label="Monto que te remite"><Num value={form.monto || ""} onChange={(e) => set("monto", e.target.value)} /></Field>
+                  <Field label="¿Dónde lo recibes?">
+                    <Seg opciones={[{ v: "usdt", t: "USDT" }, { v: "banco", t: "Banco" }, { v: "efectivo", t: "Efectivo" }]} value={form.cuenta} onChange={(v) => set("cuenta", v)} />
                   </Field>
                 </>);
               })()}
@@ -765,8 +873,8 @@ function NuevaOpModal({ soc, libro, clientes, proveedores, terceros, prefill, on
               </>)}
 
               {conCliente && (<>
-                <Field label="Estatus" hint={tipo === "intermediacion" ? "Pendiente = el proveedor aún no te ha pasado los USDT; tu ganancia queda en Por Cobrar" : "Pendiente = el cliente aún no te ha pagado; el monto queda en Por Cobrar"}>
-                  <Seg opciones={[{ v: "Completado", t: tipo === "intermediacion" ? "USDT recibidos" : "Ya me pagó" }, { v: "Pendiente", t: "Pendiente" }]} value={form.estatus} onChange={(v) => set("estatus", v)} />
+                <Field label="Estatus" hint={tipo === "intermediacion" ? "Pendiente = el cliente aún no ha pagado en la cuenta del proveedor" : "Pendiente = el cliente aún no te ha pagado; el monto queda en Por Cobrar"}>
+                  <Seg opciones={[{ v: "Completado", t: tipo === "intermediacion" ? "Cliente ya pagó" : "Ya me pagó" }, { v: "Pendiente", t: "Pendiente" }]} value={form.estatus} onChange={(v) => set("estatus", v)} />
                 </Field>
                 {form.estatus === "Completado" && (<>
                   <Field label="¿Quién te envió el dinero?" hint="Puede ser una empresa u otra persona distinta al cliente">
@@ -855,11 +963,23 @@ function DetalleOpModal({ op, soc, onClose, onCompletar, onTogglePagado, onDelet
   }
   if (op.tipo === "intermediacion") {
     add("Proveedor", f.proveedor);
-    add("USD pagados al proveedor", `$${fmt(parseFloat(f.montoUSD) || 0)}`);
-    add("Comisión", `${f.pct}% (modo: ${f.modoComision === "dividir" ? "dividir ÷(1+%)" : "restar %"})`);
-    add("USDT del proveedor", `${fmt(c.usdtProveedor, 4)} USDT`);
+    add("USD que pagó el cliente (a la cuenta del proveedor)", `$${fmt(parseFloat(f.montoUSD) || 0)}`);
+    add("Tu comisión al cliente", `${f.pct}% (modo: ${f.modoComision === "dividir" ? "dividir ÷(1+%)" : "restar %"})`);
     add("USDT entregados al cliente", `${fmt(c.usdtCliente, 4)} USDT`);
-    add("Tu diferencia", `${fmt((c.usdtProveedor || 0) - (c.usdtCliente || 0), 4)} USDT`);
+    if (c.amigoCut > 0) add("Parte del amigo", `${f.pctAmigo}% = $${fmt(c.amigoCut)} · ${f.amigoPago === "usdt" ? "pagada en USDT ✓" : f.terceroPagado ? "pagada ✓" : "por pagar"}`);
+    if (c.feeProv > 0) add("Fee del proveedor", `$${fmt(c.feeProv)}`);
+    if (c.usdtProveedor && !c.montoCliente) add("USDT del proveedor", `${fmt(c.usdtProveedor, 4)} USDT`);
+    add("Tu ganancia", `$${fmt(c.ganancia)}`);
+  }
+  if (op.tipo === "lote_proveedor") {
+    add("Proveedor", f.proveedor);
+    add("USDT recibidos en consignación", `${fmt(c.usdtLote, 4)} USDT`);
+    add("Fee del proveedor", `${f.pctProveedor}% = $${fmt(c.fee)}`);
+    add("Deuda total con él", `$${fmt(c.deuda)}`);
+  }
+  if (op.tipo === "liquidacion_lote") {
+    add("Proveedor", f.proveedor);
+    add("Monto remitido", fmtMoneda(c.monto || 0, f.cuenta || "usdt"));
   }
   if (op.tipo === "retiro_efectivo" || op.tipo === "recompra_usdt") {
     add("Monto", `$${fmt(parseFloat(f.montoUSD ?? f.monto) || 0)}`);
@@ -1067,11 +1187,13 @@ function SociedadModal({ onSave, onClose }) {
 
 /* ============================== Vistas ============================== */
 function TableroSaldos({ libro }) {
+  const saldoProv = (libro.proveedores || []).reduce((a, p) => a + p.saldo, 0);
   const filas = [
     { icon: <Coins size={16} />, t: "USDT (Binance)", v: libro.usdt, c: "#4FD1A5" },
     { icon: <Landmark size={16} />, t: "USD en banco", v: libro.banco, c: "#8FBFEA" },
     { icon: <Banknote size={16} />, t: "USD efectivo", v: libro.efectivo, c: "#C9D77E" },
     ...(libro.porCobrar > 0.005 ? [{ icon: <Bell size={16} />, t: "Por cobrar", v: libro.porCobrar, c: "#F0B860" }] : []),
+    ...(Math.abs(saldoProv) > 0.005 ? [{ icon: <UserRound size={16} />, t: saldoProv >= 0 ? "Proveedores (te deben)" : "Proveedores (les debes)", v: saldoProv, c: saldoProv >= 0 ? "#B8A7E8" : "#F09B9B" }] : []),
   ];
   return (
     <div className="rounded-2xl bg-[#0C2A20] text-white p-5 shadow-lg">
@@ -1096,7 +1218,7 @@ function TableroSaldos({ libro }) {
 function Inicio({ soc, libro, ops }) {
   const hace30 = Date.now() - 30 * 86400000;
   const ops30 = libro.ops.filter((o) => new Date(o.fecha + "T12:00:00").getTime() >= hace30);
-  const negocio = ops30.filter((o) => !["entrada_capital", "retiro_socio", "ajuste"].includes(o.tipo));
+  const negocio = ops30.filter((o) => !["entrada_capital", "retiro_socio", "ajuste", "capitalizar", "liquidacion_lote"].includes(o.tipo));
   const gan30 = negocio.reduce((a, o) => a + (o.calc?.ganancia || 0), 0);
   const vol30 = negocio.reduce((a, o) => a + Math.abs(parseFloat(o.form.montoUSD) || parseFloat(o.form.montoUSDT) || parseFloat(o.form.montoEfectivo) || parseFloat(o.form.monto) || 0), 0);
   const rois = negocio.map((o) => o.calc?.roi).filter((r) => r);
@@ -1400,6 +1522,27 @@ function Pendientes({ libro, onCompletar, onTogglePagado }) {
           })}
         </div>
       </div>
+
+      {(libro.proveedores || []).length > 0 && (
+        <div>
+          <h3 className="text-[12px] uppercase tracking-wide font-bold text-stone-400 mb-2">Cuentas con proveedores</h3>
+          <div className="grid gap-2">
+            {libro.proveedores.map((p) => (
+              <div key={p.nombre} className="rounded-xl bg-white border border-stone-200 p-3.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[14px] text-stone-900">{p.nombre}</span>
+                  <Badge tone={Math.abs(p.saldo) < 0.005 ? "dim" : p.saldo > 0 ? "ok" : "bad"}>
+                    {Math.abs(p.saldo) < 0.005 ? "En cero ✓" : p.saldo > 0 ? `Te debe $${fmt(p.saldo)}` : `Le debes $${fmt(-p.saldo)}`}
+                  </Badge>
+                </div>
+                <div className="text-[11px] text-stone-400 mt-1.5" style={{ fontFamily: "'IBM Plex Mono',monospace" }}>
+                  Lote {fmt(p.lote, 0)} USDT · Cobrado ${fmt(p.cobrado, 0)} · Deuda ${fmt(p.deuda, 0)} · Remesado ${fmt(p.remesas, 0)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <h3 className="text-[12px] uppercase tracking-wide font-bold text-stone-400 mb-2">Por pagar a socios externos</h3>
